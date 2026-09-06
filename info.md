@@ -12,28 +12,28 @@
 
 
 # agents will have
-** purpose **
-** input **
-** output schema **
-** LLM/model **
-** tools **
-** instruction **
-** success criteria **
+1. ** purpose **
+2. ** input **
+3. ** output schema **
+4. ** LLM/model **
+5. ** tools **
+6. ** instruction **
+7. ** success criteria **
 
 # some depends on agent
 
-** state **
-** memory **
-** decision logic **
-** validation **
-** retry **
-** fallback **
+1. ** state **
+2. ** memory **
+3. ** decision logic **
+4. ** validation **
+5. ** retry **
+6. ** fallback **
 
 
 # Governance items
 # these are for agents that can cause actions (like code, test agents)
-** Human intervention **
-** permission **
-** audit logging **
-** guardrils **
-** rollbacks **
+1. ** Human intervention **
+2. ** permission **
+3. ** audit logging **
+4. ** guardrils **
+5. ** rollbacks **
