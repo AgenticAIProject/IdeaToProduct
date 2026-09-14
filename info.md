@@ -11,6 +11,8 @@
 9. **Produce structured output.**
 
 
+
+
 # agents will have
 1. **purpose**
 2. **input**
@@ -37,3 +39,47 @@
 3. **audit logging**
 4. **guardrils**
 5. **rollbacks**
+
+
+
+
+
+
+
+hackathon-product-studio/
+│
+├── app/
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── requirement_agent.py
+│   │   ├── market_agent.py
+│   │   ├── design_agent.py
+│   │   ├── code_agent.py
+│   │   ├── test_agent.py
+│   │   ├── review_agent.py
+│   │   └── documentation_agent.py
+│   │
+│   ├── tools/
+│   │   ├── file_tools.py
+│   │   ├── git_tools.py
+│   │   └── test_tools.py
+│   │
+│   ├── skills/
+│   │   └── requirements_skill.py
+│   │
+│   ├── memory/
+│   │   └── memory_service.py
+│   │
+│   ├── graph/
+│   │   ├── state.py
+│   │   ├── nodes.py
+│   │   └── workflow.py
+│   │
+│   └── main.py
+│
+├── artifacts/
+├── tests/
+├── .env
+├── .gitignore
+├── requirements.txt
+└── README.md
