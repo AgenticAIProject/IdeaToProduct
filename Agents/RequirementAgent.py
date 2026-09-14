@@ -126,9 +126,12 @@ README.md / documentation
 
 
 
+from pathlib import Path
 
+from dotenv import load_dotenv
+from langchain_openrouter import ChatOpenRouter
 
-
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 # from app.graph.agentState import ProjectState
@@ -147,6 +150,7 @@ def Requirement_Agent(state: AgentState) -> AgentState:
     # 5. create artifact
 
     requirements = {
+        "deleteThis":"",
         "problem_statement": "",
         "objectives": [],
         "actors": [],
@@ -161,6 +165,23 @@ def Requirement_Agent(state: AgentState) -> AgentState:
         "open_questions": []
     }
 
+
+
+    
+
+
+
+    llm = ChatOpenRouter(
+        model="gemini-3.6-flash",
+        max_tokens=256
+    )
+
+    response = llm.invoke(
+        "Hi, good Evening! Explain what a functional requirement is in one sentence."
+    )
+
+    requirements["deleteThis"] = response.text
+    print(response.text)
     return {
         "requirements": requirements,
         "requirements_version": 1
