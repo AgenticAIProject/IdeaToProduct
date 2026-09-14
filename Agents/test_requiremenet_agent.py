@@ -2,7 +2,6 @@ from State_definition import AgentState
 from RequirementAgent import Requirement_Agent
 
 state: AgentState = {
-
     # Project
     "project_id": "project_001",
     "user_id": "user_001",
@@ -53,5 +52,4 @@ state: AgentState = {
 }
 
 result = Requirement_Agent(state)
-
 print(result)
