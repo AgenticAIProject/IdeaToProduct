@@ -1,262 +1,219 @@
-
-
-# Pydantic structured output
-
-
-"""
-
-system prompt
-You are the Requirement Agent.
-
-Your responsibility is to transform a vague software
-idea into implementation-ready requirements.
-
-You must:
-- identify users
-- identify objectives
-- generate user stories
-- generate functional requirements
-- generate non-functional requirements
-- identify constraints
-- define acceptance criteria
-
-You must NOT:
-- choose programming languages
-- choose databases
-- write implementation code
-- make architectural decisions
-
-
-skills
-
-Requirement Agent
-        │
-        └── Requirements Engineering Skill
-               ├── User story methodology
-               ├── FR/NFR identification
-               ├── Acceptance criteria
-               ├── Scope analysis
-               └── Requirement validation
-
-               
-
-
-               {
-    "agent": "requirements",
-    "model": "....",
-    "input_tokens": 4200,
-    "output_tokens": 1800,
-    "latency_ms": 3200
-}
-
-
-for tokens control
-
-
-Requirement Agent
-→ idea + relevant memory + GitHub evidence
-
-Design Agent
-→ requirements + relevant memory
-
-Code Agent
-→ requirements + design + relevant memory + repository
-
-Test Agent
-→ code + requirements/acceptance criteria
-
-Review Agent
-→ requirements + design + code + test results
-
-
-
-
-
-security 
-
-
-with restrictions on:
-
-filesystem access
-network access
-CPU
-memory
-execution time
-secrets/environment variables
-dangerous commands
-
-
-
-
-
-Long-term Memory
- ├── scope decisions
- ├── architecture decisions
- ├── rejected approaches
- ├── user constraints
- └── lessons learned
-
-
-
- artifacts
-
- Requirement Agent
-    ↓
-requirements.json
-
-Design Agent
-    ↓
-design.md
-
-Code Agent
-    ↓
-Git repository / commit
-
-Test Agent
-    ↓
-test_results.json
-
-Review Agent
-    ↓
-review.md
-
-Documentation Agent
-    ↓
-README.md / documentation
-
-
-
-
-Requirement Agent tools
-
-github MCP
-artifact reading / writing
-memory access
-
-
-"""
-
-
-
 from pydantic import BaseModel, Field
-
+import imports
 
 class RequirementsList(BaseModel):
-
     problem_statement: str
-
     objectives: list[str]
-
     actors: list[str]
-
     user_stories: list[str]
-
     functional_requirements: list[str]
+    non_functional_requirements: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
 
-    non_functional_requirements: list[str]
-
-    acceptance_criteria: list[str]
-
-    constraints: list[str]
-
-    assumptions: list[str]
-
-    in_scope: list[str]
-
-    out_of_scope: list[str]
-
-    open_questions: list[str]
+    constraints: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    in_scope: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
 
 
-
-class ClarificationResponse(imports.BaseModel):
+class ClarificationResponse(BaseModel):
     needs_clarification: bool
     questions: list[str]
 
 
-
-
-import json
-
-import imports
-
-
-
-# from app.graph.agentState import ProjectState
-
-
 def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
+
     idea = state["idea"]
+
     print("Requirement Agent received:")
     print(idea)
 
-    # Later:
-    # 1. retrieve memory
-    # 2. search GitHub issues
-    # 3. call LLM
-    # 4. validate requirements
-    # 5. create artifact
+    # ---------------------------------------------------------
+    # 1. Create LLM
+    # ---------------------------------------------------------
 
-    requirements = {
-        "problem_statement": "",
-        "objectives": [],
-        "actors": [],
-        "user_stories": [],
-        "functional_requirements": [],
-        "non_functional_requirements": [],
-        "acceptance_criteria": [],
-        "constraints": [],
-        "assumptions": [],
-        "in_scope": [],
-        "out_of_scope": [],
-        "open_questions": []
-    }
+    llm = imports.ChatOpenRouter(
+        model="google/gemini-3.6-flash",
+        max_tokens=3000
+    )
 
-    # system_prompt
-    # REQUIREMENT_SYSTEM_PROMPT = """
-    systemP=""" 
+    # ---------------------------------------------------------
+    # 2. Check whether clarification is required
+    # ---------------------------------------------------------
+
+    clarification_prompt = imports.SystemMessage(
+    content="""
+You are a requirements analysis agent.
+
+Your job is to decide whether there is enough information
+to create a reasonable V1 requirements document.
+
+IMPORTANT:
+
+The goal is NOT to completely specify the product.
+
+The goal is to determine whether there is enough information
+to produce useful, testable V1 requirements.
+
+Ask clarification questions only when missing information
+would fundamentally change the problem, target users, or
+core workflow.
+
+Do NOT ask questions merely about optional details.
+
+For example, do NOT require the user to specify:
+
+- exact application status names
+- notification mechanisms
+- expiration dates
+- administrative approval workflows
+- detailed permissions
+- UI details
+- database choices
+- programming languages
+- frameworks
+- architecture
+
+Those can be captured later as assumptions or open questions.
+
+Rules:
+
+- Ask at most 3 questions in one round.
+- Prefer questions about users, problem, goal, and core workflow.
+- Consider previous clarification answers carefully.
+- If enough information exists to define a reasonable V1,
+  return needs_clarification=false.
+- When information is uncertain but not critical, do NOT ask.
+  Let the Requirement Agent record the uncertainty as an
+  assumption or open question.
+
+Return the result according to the provided schema.
+"""
+)
+
+    clarification_llm = llm.with_structured_output(
+        ClarificationResponse,
+        method="json_schema"
+    )
+
+    # ---------------------------------------------------------
+    # 3. Include previous answers if this is a
+    #    clarification round
+    # ---------------------------------------------------------
+
+    user_input = idea
+
+    if state["user_answers"]:
+
+        user_input += "\n\nPrevious clarification answers:\n"
+
+        for answer in state["user_answers"]:
+            user_input += f"- {answer}\n"
+ # ---------------------------------------------------------
+# 4. Maximum clarification rounds
+# ---------------------------------------------------------
+
+    MAX_CLARIFICATION_ROUNDS = 2
+
+    if state["clarification_round"] >= MAX_CLARIFICATION_ROUNDS:
+        clarification_check = ClarificationResponse(
+            needs_clarification=False,
+            questions=[]
+        )
+
+    else:
+        clarification_check = clarification_llm.invoke([
+            clarification_prompt,
+            imports.HumanMessage(content=user_input)
+        ])
+
+    # ---------------------------------------------------------
+    # 5. Ask clarification question
+    # ---------------------------------------------------------
+
+    clarification_check = clarification_llm.invoke([
+        clarification_prompt,
+        imports.HumanMessage(content=user_input)
+    ])
+
+    # ---------------------------------------------------------
+    # 6. If clarification is needed, stop here
+    # ---------------------------------------------------------
+
+    if clarification_check.needs_clarification:
+
+        return {
+            "clarification_questions":
+                clarification_check.questions,
+
+            "clarification_round":
+                state["clarification_round"] + 1,
+
+            "current_stage":
+                "clarification",
+
+            "workflow_status":
+                "waiting_for_user"
+        }
+
+    # ---------------------------------------------------------
+    # 7. Generate requirements
+    # ---------------------------------------------------------
+
+    requirement_prompt = imports.SystemMessage(
+        content="""
 You are the Requirement Agent.
 
-Your responsibility is to transform a vague software
+Your responsibility is to transform a software
 idea into implementation-ready requirements.
 
 You must:
-- identify users
+
+- identify the problem
+- identify users and actors
 - identify objectives
 - generate user stories
 - generate functional requirements
 - generate non-functional requirements
-- identify constraints
 - define acceptance criteria
+- identify constraints
+- identify assumptions
+- define what is in scope
+- define what is out of scope
+- identify remaining open questions
+
+As a [role], I want [capability], so that [benefit].
+Acceptance criteria should be concrete and testable.
+
+Do not invent specific technical constraints unless they
+are explicitly provided by the user.
+
+If a requirement is necessary but not specified by the user,
+record it as an assumption or open question instead.
 
 You must NOT:
+
 - choose programming languages
 - choose databases
+- choose frameworks
 - write implementation code
 - make architectural decisions
 
-Return only valid JSON with exactly these keys:
+Requirements must be:
 
-problem_statement,
-objectives,
-actors,
-user_stories,
-functional_requirements,
-non_functional_requirements,
-acceptance_criteria,
-constraints,
-assumptions,
-in_scope,
-out_of_scope,
-open_questions.
+- clear
+- concise
+- testable
+- internally consistent
+- implementation-ready
 
-Use a string for problem_statement and arrays of concise
-strings for every other key.
-
-Do not use Markdown, code fences, or explanatory text.
+Return the result according to the provided schema.
 """
+    )
 
-    REQUIREMENT_SKILL = """
+    requirement_skill = imports.SystemMessage(
+        content="""
 Requirements Engineering Methodology:
 
 1. Identify stakeholders and actors.
@@ -268,112 +225,40 @@ Requirements Engineering Methodology:
 7. Define acceptance criteria.
 8. Identify constraints and assumptions.
 9. Define project scope.
-10. Validate requirements for clarity,
+10. Identify open questions.
+11. Validate requirements for clarity,
     consistency, feasibility and testability.
 """
-
-
-    userInput=imports.HumanMessage(content=idea)
-    systemPrompt=imports.SystemMessage(systemP  + "\n\n"+ REQUIREMENT_SKILL)
-
-    llm = imports.ChatOpenRouter(
-        model="gemini-3.6-flash",
-        max_tokens=2000,
-        model_kwargs={
-            "response_format": {"type": "json_object"}
-        }
     )
 
-
-    requirement_llm=llm.with_structured_output(RequirementsList)
-
-    # response = llm.invoke(
-    #     "Hi, good Evening! Explain what a functional requirement is in one sentence."
-    # )
-
-    response = requirement_llm.invoke([systemPrompt, userInput])
-
-    outputRequirements = response.model_dump()
-
-
-   
-
-
-
-    # response_text = response.content.strip()
-    # try:
-    #     parsed_requirements = json.loads(response_text)
-    # except json.JSONDecodeError:
-    #     raise ValueError(
-    #         "Requirement Agent failed to generate valid JSON"
-    #     )
-
-    # if not isinstance(parsed_requirements, dict):
-    #     raise ValueError(
-    #         "Requirement Agent output must be a JSON object"
-    #     )
-
-    # return {
-    #     "requirements": parsed_requirements,
-    #     "requirements_version": 1
-    # }
-
-
-
-
-
-
-
-
-        
-    clarification_llm = llm.with_structured_output(
-        ClarificationResponse
+    requirement_llm = llm.with_structured_output(
+        RequirementsList,
+        method="json_schema"
     )
 
-
-    clarification_prompt = imports.SystemMessage(
-    content="""
-You are a requirements analysis agent.
-
-Determine whether the user's software idea contains
-enough information to generate implementation-ready
-requirements.
-
-Ask clarification questions only when missing
-information materially affects the requirements.
-
-Rules:
-- Ask at most 3 questions.
-- Questions must concern the problem, users, goals,
-  scope, or expected behavior.
-- Do NOT ask about programming languages,
-  databases, frameworks, or architecture.
-- If enough information is available, return
-  needs_clarification=false and an empty questions list.
-"""
-)
-
-
-    clarification_check = clarification_llm.invoke([
-        clarification_prompt,
-        imports.HumanMessage(content=idea)
+    response = requirement_llm.invoke([
+        requirement_prompt,
+        requirement_skill,
+        imports.HumanMessage(content=user_input)
     ])
 
-    if clarification_check.needs_clarification:
+    output_requirements = response.model_dump()
 
-        return {
-            "clarification_questions":
-                clarification_check.questions,
-
-            "clarification_round":
-                state["clarification_round"] + 1,
-
-            "current_stage": "clarification"
-        }
-
+    # ---------------------------------------------------------
+    # 8. Return requirements
+    # ---------------------------------------------------------
 
     return {
-        "requirements": outputRequirements,
-        "requirements_version": 1
-    }
+        "requirements": output_requirements,
 
+        "requirements_version":
+            state["requirements_version"] + 1,
+
+        "clarification_questions": [],
+
+        "current_stage":
+            "requirements",
+
+        "workflow_status":
+            "running"
+    }

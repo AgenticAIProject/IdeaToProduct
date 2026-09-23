@@ -1,7 +1,9 @@
 from State_definition import AgentState
-from RequirementAgent import Requirement_Agent
+from graph import graph
+
 
 state: AgentState = {
+
     # Project
     "project_id": "project_001",
     "user_id": "user_001",
@@ -51,5 +53,75 @@ state: AgentState = {
     "approval_status": "pending"
 }
 
-result = Requirement_Agent(state)
-print(result)
+
+# =========================================================
+# ROUND 1
+# =========================================================
+
+print("\n========== ROUND 1 ==========")
+
+result = graph.invoke(state)
+
+
+print("\nCurrent stage:")
+print(result["current_stage"])
+
+print("\nWorkflow status:")
+print(result["workflow_status"])
+
+print("\nClarification questions:")
+
+for i, question in enumerate(
+    result["clarification_questions"],
+    start=1
+):
+    print(f"{i}. {question}")
+
+
+# =========================================================
+# USER ANSWERS
+# =========================================================
+
+answers = [
+    "The main users are students and company recruiters.",
+
+    "Students should be able to search internships, filter listings, view details, upload resumes, apply, and track application status.",
+
+    "Applications should be submitted directly through the platform. Recruiters should review applications and update the application status."
+]
+
+
+# Add answers to state
+result["user_answers"] = answers
+
+
+# =========================================================
+# ROUND 2
+# =========================================================
+
+print("\n========== ROUND 2 ==========")
+
+result = graph.invoke(result)
+
+
+print("\nCurrent stage:")
+print(result["current_stage"])
+
+print("\nWorkflow status:")
+print(result["workflow_status"])
+
+print("\nClarification questions:")
+
+for i, question in enumerate(
+    result["clarification_questions"],
+    start=1
+):
+    print(f"{i}. {question}")
+
+
+print("\nRequirements:")
+
+print(result["requirements"])
+
+print("\nDesign:")
+print(result["design"])
