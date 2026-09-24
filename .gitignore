@@ -26,3 +26,9 @@ Thumbs.db
 *.log
 
 test_requiremenet_agent.py
+test_requirement.py
+test_review_agent.py
+test_design_agent.py
+
+
+
