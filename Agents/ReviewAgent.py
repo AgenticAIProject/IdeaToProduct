@@ -20,39 +20,13 @@ def Review_Agent(state: imports.AgentState) -> imports.AgentState:
     # 2. Setup Review Prompt
     # ---------------------------------------------------------
 
-    review_prompt = imports.SystemMessage(
-        content="""
-You are the Review Agent.
+    review_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/review_prompt.txt"))
 
-Your responsibility is to review the software artifacts generated in the current project, including requirements, design, code, and test results.
-You must analyze them for consistency, correctness, completeness, and overall quality.
-
-You must:
-- Evaluate if the design and code fulfill all the original requirements.
-- Identify any defects, bugs, security vulnerabilities, or architectural flaws.
-- Provide constructive feedback for improvements.
-- Decide whether to approve the current iteration or reject it (which requires a retry).
-- Assign an overall quality score from 1 to 10.
-
-Return the result according to the provided schema.
-"""
-    )
-
-    review_skill = imports.SystemMessage(
-        content="""
-Review Methodology:
-
-1. Consistency Check: Ensure requirements match design and code implementations.
-2. Completeness Check: Ensure no missing features or unhandled edge cases.
-3. Quality Check: Look for best practices, maintainability, and clean architecture.
-4. Defect Identification: Highlight any test failures, potential bugs, or performance issues.
-5. Final Verdict: If defects are critical, reject the build. Otherwise, approve.
-"""
-    )
+    review_skill = imports.SystemMessage(content=imports.load_prompt("skills/review_skill.txt"))
 
     review_llm = llm.with_structured_output(
         ReviewResult,
-        method="json_schema"
+        
     )
 
     # ---------------------------------------------------------

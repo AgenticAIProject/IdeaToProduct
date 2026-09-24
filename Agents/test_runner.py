@@ -43,17 +43,20 @@ def run_code_tests(files: Union[List[Dict], Dict], test_files: Dict[str, str], t
         run_cmd = ""
         # If the CodeAgent provided dependencies, install them quietly first
         if os.path.exists(os.path.join(temp_dir, "requirements.txt")):
+            print("  [Sandbox] Installing dependencies from requirements.txt...")
             run_cmd += "pip install -r requirements.txt > /dev/null 2>&1 && "
             
         if test_command:
             run_cmd += test_command
         else:
             # Default to pytest
+            print("  [Sandbox] Preparing pytest environment...")
             run_cmd += "pip install pytest > /dev/null 2>&1 && pytest --tb=short"
             
         # 5. Run the tests in Docker sandbox (or fallback to subprocess)
         try:
             if has_docker:
+                print("  [Sandbox] 🐳 Spawning secure Docker container (python:3.11-slim)...")
                 # Secure Docker isolation
                 cmd = [
                     "docker", "run", "--rm",

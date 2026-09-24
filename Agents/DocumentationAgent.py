@@ -62,43 +62,10 @@ def Documentation_Agent(state: AgentState) -> dict:
 
     doc_llm = llm.with_structured_output(
         DocumentationDocument,
-        method="json_schema"
+        
     )
 
-    doc_prompt = imports.SystemMessage(
-        content="""
-You are an expert Technical Writer and Software Documentation Agent.
-
-Your responsibility is to generate clean, professional, and comprehensive documentation
-for a software project based on its approved requirements, system design, source code, and test results.
-
-You must generate:
-1. `readme`:
-   - Project title & clear problem statement
-   - Feature highlights derived from functional requirements
-   - Setup, installation, and environment configuration instructions
-   - How to run the application and execute tests
-2. `api_reference`:
-   - Detailed specification of the public API endpoints / core classes / methods
-   - Parameter names, types, expected inputs, outputs, and status codes
-   - Clear code examples of how to invoke the APIs
-3. `architecture_overview`:
-   - System design breakdown (components, data models, and relationships)
-   - Technical decisions made and their architectural rationale
-   - Edge case considerations and failure recovery strategies
-4. `user_guide`:
-   - Step-by-step user journeys broken down by actors/personas
-   - Actionable instructions for using each core capability
-5. `changelog`:
-   - Clean V1.0.0 release notes summarizing initial launch capabilities and verified tests
-
-RULES:
-- Base all documentation directly on the provided project artifacts.
-- Do NOT invent features that are not in the requirements, design, or code.
-- Format all outputs with clean GitHub-flavored Markdown.
-- Return the structured documentation document adhering to the schema.
-"""
-    )
+    doc_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/documentation_prompt.txt"))
 
     human_prompt = imports.HumanMessage(
         content=f"""

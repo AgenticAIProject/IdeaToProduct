@@ -39,59 +39,10 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
     # 2. Check whether clarification is required
     # ---------------------------------------------------------
 
-    clarification_prompt = imports.SystemMessage(
-    content="""
-You are a requirements analysis agent.
-
-Your job is to decide whether there is enough information
-to create a reasonable V1 requirements document.
-
-IMPORTANT:
-
-The goal is NOT to completely specify the product.
-
-The goal is to determine whether there is enough information
-to produce useful, testable V1 requirements.
-
-Ask clarification questions only when missing information
-would fundamentally change the problem, target users, or
-core workflow.
-
-Do NOT ask questions merely about optional details.
-
-For example, do NOT require the user to specify:
-
-- exact application status names
-- notification mechanisms
-- expiration dates
-- administrative approval workflows
-- detailed permissions
-- UI details
-- database choices
-- programming languages
-- frameworks
-- architecture
-
-Those can be captured later as assumptions or open questions.
-
-Rules:
-
-- Ask at most 3 questions in one round.
-- Prefer questions about users, problem, goal, and core workflow.
-- Consider previous clarification answers carefully.
-- If enough information exists to define a reasonable V1,
-  return needs_clarification=false.
-- When information is uncertain but not critical, do NOT ask.
-  Let the Requirement Agent record the uncertainty as an
-  assumption or open question.
-
-Return the result according to the provided schema.
-"""
-)
+    clarification_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/clarification_prompt.txt"))
 
     clarification_llm = llm.with_structured_output(
-        ClarificationResponse,
-        method="json_schema"
+        ClarificationResponse
     )
 
     # ---------------------------------------------------------
@@ -126,15 +77,6 @@ Return the result according to the provided schema.
         ])
 
     # ---------------------------------------------------------
-    # 5. Ask clarification question
-    # ---------------------------------------------------------
-
-    clarification_check = clarification_llm.invoke([
-        clarification_prompt,
-        imports.HumanMessage(content=user_input)
-    ])
-
-    # ---------------------------------------------------------
     # 6. If clarification is needed, stop here
     # ---------------------------------------------------------
 
@@ -158,79 +100,12 @@ Return the result according to the provided schema.
     # 7. Generate requirements
     # ---------------------------------------------------------
 
-    requirement_prompt = imports.SystemMessage(
-        content="""
-You are the Requirement Agent.
+    requirement_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/requirement_prompt.txt"))
 
-Your responsibility is to transform a software
-idea into implementation-ready requirements.
-
-You must:
-
-- identify the problem
-- identify users and actors
-- identify objectives
-- generate user stories
-- generate functional requirements
-- generate non-functional requirements
-- define acceptance criteria
-- identify constraints
-- identify assumptions
-- define what is in scope
-- define what is out of scope
-- identify remaining open questions
-
-As a [role], I want [capability], so that [benefit].
-Acceptance criteria should be concrete and testable.
-
-Do not invent specific technical constraints unless they
-are explicitly provided by the user.
-
-If a requirement is necessary but not specified by the user,
-record it as an assumption or open question instead.
-
-You must NOT:
-
-- choose programming languages
-- choose databases
-- choose frameworks
-- write implementation code
-- make architectural decisions
-
-Requirements must be:
-
-- clear
-- concise
-- testable
-- internally consistent
-- implementation-ready
-
-Return the result according to the provided schema.
-"""
-    )
-
-    requirement_skill = imports.SystemMessage(
-        content="""
-Requirements Engineering Methodology:
-
-1. Identify stakeholders and actors.
-2. Define the problem clearly.
-3. Identify measurable objectives.
-4. Generate user stories.
-5. Convert user needs into functional requirements.
-6. Identify non-functional requirements.
-7. Define acceptance criteria.
-8. Identify constraints and assumptions.
-9. Define project scope.
-10. Identify open questions.
-11. Validate requirements for clarity,
-    consistency, feasibility and testability.
-"""
-    )
+    requirement_skill = imports.SystemMessage(content=imports.load_prompt("skills/requirement_skill.txt"))
 
     requirement_llm = llm.with_structured_output(
-        RequirementsList,
-        method="json_schema"
+        RequirementsList
     )
 
     response = requirement_llm.invoke([

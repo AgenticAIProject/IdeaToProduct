@@ -347,58 +347,11 @@ def Code_Agent(state: AgentState) -> AgentState:
 
     llm = imports.get_llm(max_tokens=8000)
 
-    code_prompt = imports.SystemMessage(content="""
-You are the Code Agent in a software development pipeline.
-
-Your job is to implement a working, runnable codebase from the requirements and design.
-
-You MUST respond with ONLY a valid JSON object — no markdown explanations, no prose outside JSON.
-Start your response directly with { and end with }.
-
-The JSON must match this exact structure:
-{
-  "files": [
-    {
-      "path": "requirements.txt",
-      "content": "fastapi>=0.100.0\\nuvicorn>=0.22.0\\npydantic>=2.0.0\\npytest>=7.0.0\\nhttpx>=0.24.0\\n",
-      "description": "Python package dependencies"
-    },
-    {
-      "path": "main.py",
-      "content": "full source code here",
-      "description": "FastAPI application entrypoint"
-    },
-    {
-      "path": "models.py",
-      "content": "full source code here",
-      "description": "Data models"
-    },
-    {
-      "path": "test_main.py",
-      "content": "full source code here",
-      "description": "Pytest tests"
-    },
-    {
-      "path": "README.md",
-      "content": "# Project setup instructions",
-      "description": "Project documentation"
-    }
-  ],
-  "dependencies": ["fastapi", "uvicorn", "pydantic", "pytest", "httpx"],
-  "setup_instructions": "pip install -r requirements.txt && uvicorn main:app --reload",
-  "implementation_notes": ["note1"]
-}
-
-CRITICAL RULES:
-1. Always include 'requirements.txt' in 'files' with all needed pip packages. Never leave it empty.
-2. Generate REAL, COMPLETE, RUNNABLE code. Do not output stubs or placeholders.
-3. Keep code concise and focused on the core features (3-5 files total).
-4. Include a test file 'test_main.py' using pytest.
-""")
+    code_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/code_prompt.txt"))
 
     try:
-        response = imports.invoke_and_parse(
-            llm,
+        code_llm = llm.with_structured_output(CodeArtifact)
+        response: CodeArtifact = code_llm.invoke(
             [
                 code_prompt,
                 imports.HumanMessage(content=f"""
@@ -415,8 +368,7 @@ Project ID: {project_id}
 
 Generate the complete implementation files including requirements.txt, main.py, and test_main.py as JSON now.
 """)
-            ],
-            CodeArtifact
+            ]
         )
     except Exception as e:
         print(f"  [Code Agent] LLM code generation encountered issue: {e}")

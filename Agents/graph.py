@@ -85,7 +85,10 @@ builder.add_conditional_edges(
 
 builder.add_edge("documentation", END)
 
-graph = builder.compile()
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
+graph = builder.compile(checkpointer=memory)
 
 if __name__ == "__main__":
     print("\n========== LangGraph Workflow Diagram (Mermaid) ==========\n")

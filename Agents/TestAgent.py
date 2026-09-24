@@ -56,30 +56,11 @@ def Test_Agent(state: AgentState) -> dict:
 
     test_generator_llm = llm.with_structured_output(
         TestSuiteGeneration,
-        method="json_schema"
+        
     )
 
     # 2. System prompt enforcing independent test generation
-    system_prompt = imports.SystemMessage(
-        content="""
-You are an independent Quality Assurance and Test Engineering Agent.
-
-Your responsibility is to write comprehensive, objective unit/integration tests
-for the software code produced by the Code Agent.
-
-You must:
-1. Examine the Requirements (acceptance criteria, functional requirements, user stories).
-2. Examine the Design (components, data models, API endpoints, edge cases).
-3. Examine the provided Source Code files.
-4. Author clean, executable Python test code using `unittest` or `pytest`.
-5. Cover happy paths, boundary cases, and error conditions.
-6. Make sure tests import the code modules directly (e.g. `from app import ...` or `from models import ...`).
-7. Never use external network requests; mock network calls or external services if needed.
-8. Output executable test code in test_file_content.
-
-Return the result according to the provided schema.
-"""
-    )
+    system_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/test_prompt.txt"))
 
     # Prepare file inventory for prompt
     files_context = "\n\n".join(

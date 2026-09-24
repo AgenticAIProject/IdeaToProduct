@@ -1,0 +1,14 @@
+Requirements Engineering Methodology:
+
+1. Identify stakeholders and actors.
+2. Define the problem clearly.
+3. Identify measurable objectives.
+4. Generate user stories.
+5. Convert user needs into functional requirements.
+6. Identify non-functional requirements.
+7. Define acceptance criteria.
+8. Identify constraints and assumptions.
+9. Define project scope.
+10. Identify open questions.
+11. Validate requirements for clarity,
+    consistency, feasibility and testability.
