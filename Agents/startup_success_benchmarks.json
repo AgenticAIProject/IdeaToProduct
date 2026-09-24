@@ -1,0 +1,117 @@
+{
+  "ecommerce": {
+    "category": "E-Commerce & Retail",
+    "keywords": ["shop", "shopping", "ecommerce", "store", "cart", "product", "checkout", "marketplace", "buy", "sell"],
+    "historical_success_rate": 0.38,
+    "viability_score": 7.2,
+    "verdict": "viable_competitive",
+    "top_competitors": ["Shopify", "WooCommerce", "BigCommerce", "Amazon"],
+    "failure_reasons": [
+      "High customer acquisition costs (CAC) exceeding lifetime value",
+      "Friction in checkout flow leading to cart abandonment",
+      "Payment gateway compliance and chargeback fraud",
+      "Inventory sync latency and out-of-stock ordering"
+    ],
+    "critical_v1_factors": [
+      "Frictionless single-page checkout",
+      "Accurate real-time inventory locking",
+      "Transparent shipping/tax calculation before payment"
+    ],
+    "opportunities": ["Niche direct-to-consumer branding", "Headless modular commerce API"]
+  },
+  "edtech_internships": {
+    "category": "Education & Student Internships",
+    "keywords": ["student", "internship", "intern", "university", "college", "job", "career", "hire", "resume", "apply"],
+    "historical_success_rate": 0.44,
+    "viability_score": 7.8,
+    "verdict": "viable_growing",
+    "top_competitors": ["Handshake", "LinkedIn Internships", "WayUp", "Wellfound"],
+    "failure_reasons": [
+      "Two-sided marketplace chicken-and-egg problem (students vs employers)",
+      "Unverified spam or ghost job postings deteriorating student trust",
+      "Low employer response rate discouraging applicants",
+      "Resume parsing errors missing qualified candidates"
+    ],
+    "critical_v1_factors": [
+      "Employer verification process before publishing listings",
+      "Structured application tracking with status notifications for students",
+      "Lightweight direct resume upload and profile creation"
+    ],
+    "opportunities": ["University-specific career partnerships", "Early career skill matching"]
+  },
+  "productivity_scheduling": {
+    "category": "Productivity & Schedule Planning",
+    "keywords": ["schedule", "planner", "calendar", "task", "todo", "time", "meeting", "routine", "habit", "appointment"],
+    "historical_success_rate": 0.35,
+    "viability_score": 7.0,
+    "verdict": "viable_saturated",
+    "top_competitors": ["Google Calendar", "Cal.com", "Notion Calendar", "Todoist", "Cron"],
+    "failure_reasons": [
+      "High market saturation and low long-term user retention",
+      "Timezone conversion bugs and daylight saving calculation errors",
+      "Complex recurring event edge cases causing data corruption",
+      "Lack of calendar synchronization (iCal/Google/Outlook)"
+    ],
+    "critical_v1_factors": [
+      "Simple, zero-latency daily and weekly agenda views",
+      "Strict validation preventing overlapping bookings or negative durations",
+      "Deterministic recurring rule generation"
+    ],
+    "opportunities": ["AI auto-scheduling based on priority and energy levels", "Team micro-coordination"]
+  },
+  "social_community": {
+    "category": "Social & Community Platforms",
+    "keywords": ["social", "community", "chat", "feed", "network", "connect", "forum", "messaging", "group"],
+    "historical_success_rate": 0.22,
+    "viability_score": 5.5,
+    "verdict": "high_risk",
+    "top_competitors": ["Discord", "Reddit", "Discourse", "Slack"],
+    "failure_reasons": [
+      "Cold-start problem with zero initial community engagement",
+      "High moderation overhead and spam contamination",
+      "Steep cloud infrastructure scaling costs for real-time traffic"
+    ],
+    "critical_v1_factors": [
+      "Tight invite-only or micro-niche focus for initial cohorts",
+      "Automated content moderation and reporting rules"
+    ],
+    "opportunities": ["Interest-based micro-communities", "Creator monetization tools"]
+  },
+  "fintech_finance": {
+    "category": "Fintech & Personal Finance",
+    "keywords": ["finance", "money", "budget", "expense", "wallet", "crypto", "investment", "invoice", "payment", "bank"],
+    "historical_success_rate": 0.42,
+    "viability_score": 8.0,
+    "verdict": "viable_regulated",
+    "top_competitors": ["Splitwise", "Plaid", "Monzo", "QuickBooks", "Stripe"],
+    "failure_reasons": [
+      "Regulatory and licensing hurdles (KYC/AML)",
+      "Security vulnerabilities or data breaches destroying trust",
+      "Transaction fee erosion on low-margin products"
+    ],
+    "critical_v1_factors": [
+      "Audit logs for all financial mutations and calculations",
+      "End-to-end data encryption and strict input validation",
+      "Read-only aggregation before active fund movement"
+    ],
+    "opportunities": ["Expense sharing for shared living", "Automated micro-saving"]
+  },
+  "general_software": {
+    "category": "General Software & Tools",
+    "keywords": ["app", "tool", "platform", "system", "service", "portal", "dashboard"],
+    "historical_success_rate": 0.40,
+    "viability_score": 6.8,
+    "verdict": "viable",
+    "top_competitors": ["Standard SaaS incumbents"],
+    "failure_reasons": [
+      "Lack of clear value proposition for early adopters",
+      "Building too many complex features before core validation",
+      "Poor API documentation and developer onboarding"
+    ],
+    "critical_v1_factors": [
+      "Focussed single-problem solution with clear utility",
+      "Robust REST API with documented endpoints and schema validation"
+    ],
+    "opportunities": ["Modern developer experience", "AI-assisted workflows"]
+  }
+}

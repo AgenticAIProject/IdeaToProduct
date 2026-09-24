@@ -1,0 +1,74 @@
+[
+  {
+    "repo": "calcom/cal.com",
+    "domain": "scheduling",
+    "keywords": ["schedule", "calendar", "planner", "time", "booking", "meeting"],
+    "issue_number": 4812,
+    "title": "Fix: Overlapping appointment allowed when recurring events span across midnight",
+    "body": "When a user schedules an event starting at 23:30 and ending at 00:30 the next day, the slot availability validator marks the next day slot as free, causing double booking. Solution requires checking cross-day date boundaries.",
+    "labels": ["bug", "scheduling", "edge-case", "p1"]
+  },
+  {
+    "repo": "calcom/cal.com",
+    "domain": "scheduling",
+    "keywords": ["schedule", "calendar", "planner", "duration", "validation"],
+    "issue_number": 6120,
+    "title": "Validation Error: end_time before start_time returns 500 instead of 422 Unprocessable Entity",
+    "body": "Submitting a schedule item where end_time <= start_time triggered an uncaught exception in the service layer instead of returning a 422 with a clear error payload to the client.",
+    "labels": ["api", "validation", "error-handling"]
+  },
+  {
+    "repo": "medusajs/medusa",
+    "domain": "ecommerce",
+    "keywords": ["shop", "store", "ecommerce", "cart", "checkout", "order"],
+    "issue_number": 3218,
+    "title": "Bug: Cart item quantity can be incremented past available inventory stock during checkout",
+    "body": "Simultaneous checkouts by two customers allowed both orders to complete even when inventory count was 1. Requires optimistic locking or reservation during payment intent creation.",
+    "labels": ["cart", "concurrency", "inventory", "critical"]
+  },
+  {
+    "repo": "medusajs/medusa",
+    "domain": "ecommerce",
+    "keywords": ["shop", "store", "product", "price", "discount"],
+    "issue_number": 4190,
+    "title": "Float precision rounding errors in total cart amount calculation",
+    "body": "Floating point operations in tax calculation led to $0.01 discrepancies between Stripe charged amount and database invoice record. Recommended to store currency in cents (integers) or use Decimal.",
+    "labels": ["financial", "bug", "pricing"]
+  },
+  {
+    "repo": "freeCodeCamp/chapter",
+    "domain": "student_jobs",
+    "keywords": ["student", "internship", "job", "resume", "apply", "applicant"],
+    "issue_number": 1540,
+    "title": "Security: Unrestricted file upload allows non-PDF files in resume submission form",
+    "body": "Applicants could submit arbitrary .exe or .html files under resume upload endpoint. System must enforce MIME-type inspection (application/pdf) and 5MB size limit before saving.",
+    "labels": ["security", "upload", "validation"]
+  },
+  {
+    "repo": "freeCodeCamp/chapter",
+    "domain": "student_jobs",
+    "keywords": ["student", "internship", "job", "application", "status"],
+    "issue_number": 1822,
+    "title": "Duplicate application submissions allowed when clicking apply button repeatedly",
+    "body": "Users on slow mobile connections double-clicked the Submit Application button, creating duplicate records in applications table. Enforce unique constraint on (student_id, job_id).",
+    "labels": ["ux", "idempotency", "database"]
+  },
+  {
+    "repo": "splitwise-community/splitwise",
+    "domain": "finance",
+    "keywords": ["finance", "money", "budget", "expense", "split", "wallet"],
+    "issue_number": 894,
+    "title": "Negative expense values corrupt user balance ledger",
+    "body": "API did not reject negative expense amounts in payload, allowing malicious users to arbitrarily increase their credit balances. Need strictly positive float/decimal validation.",
+    "labels": ["validation", "ledger", "security"]
+  },
+  {
+    "repo": "tiangolo/fastapi",
+    "domain": "general_api",
+    "keywords": ["api", "auth", "token", "crud", "database"],
+    "issue_number": 4501,
+    "title": "CORS headers missing on 401 Unauthorized responses causing frontend browser errors",
+    "body": "When token expired, FastAPI returned raw 401 without CORS origin headers, preventing the frontend SPA from reading the error and redirecting to the login page.",
+    "labels": ["cors", "auth", "fastapi"]
+  }
+]
