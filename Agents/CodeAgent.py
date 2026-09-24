@@ -345,10 +345,7 @@ def Code_Agent(state: AgentState) -> AgentState:
     requirements = state["requirements"]
     project_id   = state["project_id"]
 
-    llm = imports.ChatOpenRouter(
-        model="openrouter/auto",
-        max_tokens=8000
-    )
+    llm = imports.get_llm(max_tokens=8000)
 
     code_prompt = imports.SystemMessage(content="""
 You are the Code Agent in a software development pipeline.

@@ -52,10 +52,7 @@ def Test_Agent(state: AgentState) -> dict:
         }
 
     # 1. Initialize LLM
-    llm = imports.ChatOpenRouter(
-        model="google/gemini-3.6-flash",
-        max_tokens=4000
-    )
+    llm = imports.get_llm(max_tokens=2000)
 
     test_generator_llm = llm.with_structured_output(
         TestSuiteGeneration,
@@ -86,7 +83,7 @@ Return the result according to the provided schema.
 
     # Prepare file inventory for prompt
     files_context = "\n\n".join(
-        [f"--- File: {path} ---\n{content}" for path, content in code_files.items()]
+        [f"--- File: {f.get('path')} ---\n{f.get('content')}" for f in code_files]
     )
 
     human_prompt = imports.HumanMessage(

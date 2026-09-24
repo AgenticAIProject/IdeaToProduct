@@ -23,10 +23,7 @@ def Design_Agent(state: AgentState) -> AgentState:
 
     requirements = state["requirements"]
 
-    llm = imports.ChatOpenRouter(
-        model="google/gemini-3.6-flash",
-        max_tokens=4000
-    )
+    llm = imports.get_llm(max_tokens=2000)
 
     design_llm = llm.with_structured_output(
         DesignDocument,

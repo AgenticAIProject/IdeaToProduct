@@ -83,3 +83,15 @@ hackathon-product-studio/
 ├── .gitignore
 ├── requirements.txt
 └── README.md
+
+
+
+
+
+problems : - >
+
+problem in review agent -> on error agent should not go back to requirement agent
+
+code agent should use different model like claude-3.5-sonnet or qwen-coder;
+
+need a edits in code agent like eddit particular line or small part. 

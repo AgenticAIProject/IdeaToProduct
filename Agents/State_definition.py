@@ -1,12 +1,24 @@
-
 from typing import TypedDict
 
+class TestResults(TypedDict):
+    success: bool
+    total_tests: int
+    passed_tests: int
+    failed_tests: int
+    errors: list[str]
+    raw_output: str
+    summary: str
+    duration_seconds: float
+    test_files: dict[str, str]
 
-from typing import TypedDict
-
+class DocumentationArtifact(TypedDict):
+    readme: str
+    api_reference: str
+    architecture_overview: str
+    user_guide: str
+    changelog: str
 
 class AgentState(TypedDict):
-
     # Project
     project_id: str
     user_id: str
@@ -48,14 +60,3 @@ class AgentState(TypedDict):
 
     # Approval
     approval_status: str
-
-
-
-# agent states 
-# tools filewriting, github access, commit, etcc..
-# system prompts
-# conditional edges
-# edges
-# skills
-# LLM calls 
-# number of tokens(input and output), context window, security, 

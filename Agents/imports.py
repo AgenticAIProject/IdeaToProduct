@@ -20,3 +20,11 @@ from langgraph.prebuilt import ToolNode
 
 
 from pydantic import BaseModel, Field
+
+def get_llm(max_tokens: int = 2000) -> ChatOpenRouter:
+    """Centralized LLM initialization so the model can be changed in one place."""
+    return ChatOpenRouter(
+        model="google/gemini-1.5-flash",
+        max_tokens=max_tokens
+    )
+

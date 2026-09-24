@@ -14,10 +14,7 @@ def Review_Agent(state: imports.AgentState) -> imports.AgentState:
     # 1. Create LLM
     # ---------------------------------------------------------
 
-    llm = imports.ChatOpenRouter(
-        model="google/gemini-3.6-flash",
-        max_tokens=3000
-    )
+    llm = imports.get_llm(max_tokens=2000)
 
     # ---------------------------------------------------------
     # 2. Setup Review Prompt
