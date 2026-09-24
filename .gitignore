@@ -24,3 +24,5 @@ Thumbs.db
 
 # Logs
 *.log
+
+test_requiremenet_agent.py
