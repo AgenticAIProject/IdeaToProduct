@@ -1,6 +1,6 @@
 import imports
 from pydantic import BaseModel, Field
-from State_definition import AgentState, DocumentationArtifact
+from State_definition import AgentState
 
 
 class DocumentationDocument(BaseModel):
@@ -129,7 +129,7 @@ Generate the complete project documentation package.
         human_prompt
     ])
 
-    documentation_payload: DocumentationArtifact = response.model_dump()
+    documentation_payload: dict = response.model_dump()
 
     return {
         "documentation": documentation_payload,

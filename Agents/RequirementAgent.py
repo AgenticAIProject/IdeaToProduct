@@ -34,10 +34,7 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
     # 1. Create LLM
     # ---------------------------------------------------------
 
-    llm = imports.ChatOpenRouter(
-        model="openrouter/auto",
-        max_tokens=3000
-    )
+    llm = imports.get_llm(max_tokens=3000)
 
     # ---------------------------------------------------------
     # 2. Build user input (include previous answers if any)
@@ -201,9 +198,14 @@ Requirements Engineering Method:
 """)
 
     response = imports.invoke_and_parse(
-        llm,
-        [requirement_prompt, skill_prompt, grounding_prompt, imports.HumanMessage(content=user_input)],
-        RequirementsList
+    llm,
+    [
+        requirement_prompt,
+        skill_prompt,
+        grounding_prompt,
+        imports.HumanMessage(content=user_input),
+    ],
+    RequirementsList,
     )
 
     output_requirements = response.model_dump()

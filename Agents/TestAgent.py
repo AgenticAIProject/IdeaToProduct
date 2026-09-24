@@ -1,6 +1,6 @@
 import imports
 from pydantic import BaseModel, Field
-from State_definition import AgentState, TestResults
+from State_definition import AgentState
 from test_runner import run_code_tests
 
 
@@ -120,7 +120,7 @@ Generate an independent verification test suite for this code.
         timeout_seconds=30
     )
 
-    test_results_payload: TestResults = {
+    test_results_payload: dict = {
         "success": execution_result["success"],
         "total_tests": execution_result["total_tests"],
         "passed_tests": execution_result["passed_tests"],
