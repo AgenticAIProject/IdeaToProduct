@@ -1,35 +1,25 @@
+
 from typing import TypedDict
 
-class TestResults(TypedDict):
-    success: bool
-    total_tests: int
-    passed_tests: int
-    failed_tests: int
-    errors: list[str]
-    raw_output: str
-    summary: str
-    duration_seconds: float
-    test_files: dict[str, str]
 
-class DocumentationArtifact(TypedDict):
-    readme: str
-    api_reference: str
-    architecture_overview: str
-    user_guide: str
-    changelog: str
+from typing import TypedDict
+
 
 class AgentState(TypedDict):
+
     # Project
     project_id: str
     user_id: str
     idea: str
 
-    # Requirements
+    # Requirements & Grounding
     clarification_questions: list[str]
     user_answers: list[str]
     clarification_round: int
     requirements: dict
     requirements_version: int
+    market_analysis: dict
+    github_evidence: list
 
     # Design
     design: dict
@@ -38,6 +28,7 @@ class AgentState(TypedDict):
     # Code
     code: dict
     code_version: int
+    generated_project_path: str
 
     # Testing
     test_results: dict
@@ -60,3 +51,14 @@ class AgentState(TypedDict):
 
     # Approval
     approval_status: str
+
+
+
+# agent states 
+# tools filewriting, github access, commit, etcc..
+# system prompts
+# conditional edges
+# edges
+# skills
+# LLM calls 
+# number of tokens(input and output), context window, security, 
