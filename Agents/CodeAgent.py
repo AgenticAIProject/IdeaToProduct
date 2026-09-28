@@ -360,9 +360,12 @@ Requirements:
 - Key features: {[fr.get('description', fr) if isinstance(fr, dict) else fr for fr in requirements.get('functional_requirements', [])[:5]]}
 
 Design:
+- System type: {design.get('system_type', 'N/A')}
 - Architecture: {design.get('architecture', 'N/A')}
 - Components: {[c.get('name', c) if isinstance(c, dict) else c for c in design.get('components', [])[:5]]}
-- API endpoints: {[f"{ep.get('method','')}{ep.get('path','')}" if isinstance(ep, dict) else ep for ep in design.get('api_endpoints', [])[:5]]}
+- Data entities: {[e.get('name', e) if isinstance(e, dict) else e for e in design.get('data_entities', [])[:5]]}
+- API endpoints: {[f"{ep.get('method','')} {ep.get('path','')}" if isinstance(ep, dict) else ep for ep in design.get('api_endpoints', [])[:5]]}
+- Design decisions: {[d.get('decision', d) if isinstance(d, dict) else d for d in design.get('design_decisions', [])[:3]]}
 
 Previous Review Feedback: {state.get('review', {}).get('feedback', [])}
 Previous Defects Found: {state.get('review', {}).get('defects', [])}
