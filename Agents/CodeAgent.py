@@ -364,9 +364,13 @@ Design:
 - Components: {design.get('components', [])[:5]}
 - API endpoints: {design.get('api_endpoints', [])[:5]}
 
+Previous Review Feedback: {state.get('review', {}).get('feedback', [])}
+Previous Defects Found: {state.get('review', {}).get('defects', [])}
+Previous Test Results: {state.get('test_results', {})}
+
 Project ID: {project_id}
 
-Generate the complete implementation files including requirements.txt, main.py, and test_main.py as JSON now.
+Generate the complete implementation files including requirements.txt, main.py, and test_main.py as JSON now. If you are fixing previous defects, make sure to apply the Review Feedback correctly!
 """)
             ]
         )

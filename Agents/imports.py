@@ -21,7 +21,7 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 
-MODEL_NAME = "google/gemma-3-27b-it:free"
+MODEL_NAME = "openai/gpt-4o-mini"
 
 
 def get_llm(max_tokens: int = 2000) -> ChatOpenRouter:
@@ -44,3 +44,5 @@ def invoke_and_parse(llm, messages, schema):
         method="json_schema",
     )
     return structured_llm.invoke(messages)
+
+

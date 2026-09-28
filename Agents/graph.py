@@ -73,13 +73,13 @@ builder.add_edge("design", "code")
 builder.add_edge("code", "test")
 builder.add_edge("test", "review")
 
-# Review routes to documentation if approved, loops back to requirement if rejected
+# Review routes to documentation if approved, loops back to code if rejected
 builder.add_conditional_edges(
     "review",
     review_router,
     {
         "approved": "documentation",
-        "rejected": "requirement"
+        "rejected": "code"
     }
 )
 

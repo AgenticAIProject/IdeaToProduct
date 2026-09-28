@@ -12,8 +12,8 @@ class RequirementsList(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
-    in_scope: list[str] = Field(default_factory=list)
-    out_of_scope: list[str] = Field(default_factory=list)
+    in_scope: list[str] = Field(default_factory=list, description="List of specific features and items that are in scope.")
+    out_of_scope: list[str] = Field(default_factory=list, description="List of specific features and items that are out of scope.")
     open_questions: list[str] = Field(default_factory=list)
 
 
@@ -90,9 +90,9 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
     # ---------------------------------------------------------
     from tools import market_check, github_issues_check
 
-    print("  [Grounding] Querying Kaggle Startup Success benchmark...")
-    market_data = market_check.invoke({"idea": state["idea"]})
-    print(f"  [Grounding] Sector: {market_data.get('category')} | Viability: {market_data.get('viability_score')}/10 ({market_data.get('verdict')})")
+    # print("  [Grounding] Querying Kaggle Startup Success benchmark...")
+    market_data = {} # market_check.invoke({"idea": state["idea"]})
+    # print(f"  [Grounding] Sector: {market_data.get('category')} | Viability: {market_data.get('viability_score')}/10 ({market_data.get('verdict')})")
 
     idea_keywords = [w for w in state["idea"].lower().split() if len(w) > 3]
     print("  [Grounding] Querying GH Archive for real developer issue patterns...")
