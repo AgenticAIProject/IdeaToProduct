@@ -1,6 +1,5 @@
 
 from typing import TypedDict
-from typing import TypedDict
 
 
 class AgentState(TypedDict):
@@ -16,7 +15,6 @@ class AgentState(TypedDict):
     clarification_round: int
     requirements: dict
     requirements_version: int
-    market_analysis: dict
     github_evidence: list
 
     # Design

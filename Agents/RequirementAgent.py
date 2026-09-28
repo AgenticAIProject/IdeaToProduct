@@ -170,7 +170,7 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     output_requirements = response.model_dump()
 
     # ---------------------------------------------------------
-    # 8. Return requirements with market & issue intelligence
+    # 8. Return requirements with grounding evidence
     # ---------------------------------------------------------
 
     return {
