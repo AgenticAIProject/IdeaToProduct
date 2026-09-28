@@ -34,7 +34,7 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
     # 1. Create LLM
     # ---------------------------------------------------------
 
-    llm = imports.get_llm(max_tokens=2000)
+    llm = imports.get_llm(max_tokens=3000)
 
     # ---------------------------------------------------------
     # 2. Build user input (include previous answers if any)

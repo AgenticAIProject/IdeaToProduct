@@ -1,61 +1,37 @@
-# Team Notes
+## Integration and Debugging Session — September 2026
 
-## Current Milestone — Requirement + Design Agents
+### Agent Integration Fixes
 
-### What was added
+During integration of the implemented SDLC agents, the following issues were identified and corrected:
 
-#### Requirement Agent
-- Converts a raw product idea into structured V1 requirements.
-- Performs clarification before generating requirements.
-- Uses structured Pydantic output.
-- Produces:
-  - Problem statement
-  - Objectives
-  - Actors
-  - User stories
-  - Functional requirements
-  - Non-functional requirements
-  - Acceptance criteria
-  - Constraints
-  - Assumptions
-  - In-scope items
-  - Out-of-scope items
-  - Open questions
-- Clarification is bounded to a maximum number of rounds.
+- Standardized LLM initialization through `imports.get_llm()` instead of creating separate LLM instances inside individual agents.
+- Added a centralized `invoke_and_parse()` helper for structured LLM responses.
+- Updated the Requirement Agent to use the centralized LLM configuration.
+- Increased the Design Agent LLM token budget to support larger structured design outputs.
+- Fixed `TestAgent.py` importing a non-existent `TestResults` type from `State_definition.py`. Test results are currently stored as a dictionary in `AgentState`.
+- Fixed `DocumentationAgent.py` importing a non-existent `DocumentationArtifact` type. Documentation output is currently stored as a dictionary in `AgentState`.
+- Removed generated project output from the repository before committing. Generated projects should remain local/runtime artifacts.
 
-#### Design Agent
-- Consumes the structured requirements produced by the Requirement Agent.
-- Produces:
-  - Architecture
-  - Components
-  - Data model
-  - API endpoints
-  - Design decisions
-  - Edge cases
-- Design decisions are kept separate from user requirements.
+### Free LLM Investigation
 
-### Graph
+The project was tested with OpenRouter free models because the team wants to avoid paid model usage during development.
 
-The current LangGraph flow is:
+- previous LLM used was failing to generate structured output, thus different LLM was tried.
+- `google/gemma-3-27b-it:free` was attempted first.
+- OpenRouter reported that this endpoint is no longer available as a free model and suggested the paid `google/gemma-3-27b-it` slug.
+- A current free Gemma endpoint, `google/gemma-4-31b-it:free`, was then tested using a small isolated diagnostic script rather than rerunning the complete pipeline.
+- The Gemma 4 endpoint was accepted, but the provider returned HTTP 429 (`Too Many Requests`).
+- Full pipeline execution was intentionally stopped at this point to avoid consuming free-model requests while debugging.
+- A temporary `Agents/test_gemma.py` file was created for the isolated model test and deleted after the investigation.
 
-Requirement → Design
+### Current Status / Next Work
 
-If clarification is required, the Requirement stage pauses for user input.
+The agent components are integrated at the state/type level, but the LLM configuration is not yet finalized.
 
-### Current Status
+Pending work:
 
-Requirement and Design agents have been tested independently and
-the two stages have been connected successfully in the graph.
-
-test_requirement_agent.py runs the graph.py testing both requirements and design agent implementation
-Max_clarification is set to 2.
-
-### Known Limitations / Future Work
-
-- Proper persistent HITL/checkpointing is not implemented yet.
-- `requirements.md` and `design.md` artifact generation is pending.
-- `decisions.log` and CUT log handling are pending.
-- Market-check grounding is pending.
-- GitHub MCP evidence grounding is pending.
-- Code Agent has not been added yet.
-- The current test manually supplies clarification answers.
+1. Select a reliably available free OpenRouter model or fallback strategy.
+2. Verify the exact response format produced by the selected model.
+3. Make `invoke_and_parse()` robust to the model's actual response format, including reasoning/thinking content if present.
+4. Run the complete Requirement → Design → Code → Test → Review → Documentation pipeline again after the LLM issue is resolved.
+5. Continue integration testing of Review and Documentation routing.
