@@ -21,13 +21,19 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 
-MODEL_NAME = "openai/gpt-4o-mini"
+MODELS = {
+    "requirement": "openai/gpt-4o-mini",    #working 
+    "code": "google/gemma-2-9b-it",  # working 
+    "design": "anthropic/claude-haiku-4.5",  #working
+    "review": "meta-llama/llama-3.3-70b-instruct",  #working
+    "test": "openai/gpt-4o-mini",  #working
+    "documentation": "openai/gpt-4o-mini"
+}
 
-
-def get_llm(max_tokens: int = 2000) -> ChatOpenRouter:
+def get_llm(agent_type: str = "requirement", max_tokens: int = 2000) -> ChatOpenRouter:
     """Centralized LLM initialization."""
     return ChatOpenRouter(
-        model=MODEL_NAME,
+        model=MODELS.get(agent_type, "openai/gpt-4o-mini"),
         max_tokens=max_tokens
     )
 

@@ -1,70 +1,56 @@
+"""
+test_main.py - Pytest integration test suite for proj_001
+"""
+import os
 import pytest
-import json
-from main import app, db, Goal
+from fastapi.testclient import TestClient
 
-@pytest.fixture
-def client():
-    app.config['TESTING'] = True
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    with app.test_client() as client:
-        with app.app_context():
-            db.create_all()
-        yield client
+from main import app
+from models import init_db
+
+client = TestClient(app)
+
 
 @pytest.fixture(autouse=True)
-def cleanup():
+def setup_test_db():
+    init_db()
     yield
-    with app.app_context():
-        db.drop_all()
 
 
-def test_create_goal(client):
-    response = client.post('/api/goals', json={'goal': 'Finish project'})
-    assert response.status_code == 201
-    assert 'goal' in response.get_json()
-
-
-def test_create_duplicate_goal(client):
-    client.post('/api/goals', json={'goal': 'Finish project'})
-    response = client.post('/api/goals', json={'goal': 'Finish project'})
-    assert response.status_code == 400
-    assert 'message' in response.get_json()
-
-
-def test_get_goals(client):
-    client.post('/api/goals', json={'goal': 'Read a book'})
-    response = client.get('/api/goals')
+def test_root_endpoint():
+    response = client.get("/")
     assert response.status_code == 200
-    assert len(response.get_json()) > 0
+    data = response.json()
+    assert data["status"] == "online"
+    assert data["project"] == "proj_001"
 
 
-def test_delete_goal(client):
-    response = client.post('/api/goals', json={'goal': 'Go for a run'})
-    goal_id = response.get_json()['id']
-    delete_response = client.delete(f'/api/goals/{goal_id}')
-    assert delete_response.status_code == 204
-    get_response = client.get('/api/goals')
-    assert goal_id not in [goal['id'] for goal in get_response.get_json()]
-
-
-def test_delete_non_existent_goal(client):
-    response = client.delete('/api/goals/999')
-    assert response.status_code == 404
-    assert 'message' in response.get_json()
-
-
-def test_update_goal_completion(client):
-    response = client.post('/api/goals', json={'goal': 'Do laundry'})
-    goal_id = response.get_json()['id']
-    response = client.patch(f'/api/goals/{goal_id}', json={'completed': True})
+def test_health_endpoint():
+    response = client.get("/health")
     assert response.status_code == 200
-    assert response.get_json()['completed'] is True
+    data = response.json()
+    assert data["status"] == "healthy"
 
 
-def test_get_completed_goals(client):
-    client.post('/api/goals', json={'goal': 'Complete the assignment'})
-    goal_id = client.get('/api/goals').get_json()[0]['id']
-    client.patch(f'/api/goals/{goal_id}', json={'completed': True})
-    response = client.get('/api/goals/completed')
-    assert response.status_code == 200
-    assert len(response.get_json()) > 0
+def test_create_and_get_item():
+    new_item = {
+        "title": "Software Engineering Internship",
+        "category": "engineering",
+        "description": "Full stack internship opportunity",
+        "status": "active"
+    }
+    post_res = client.post("/api/items", json=new_item)
+    assert post_res.status_code == 201
+    created = post_res.json()
+    assert created["title"] == new_item["title"]
+    item_id = created["id"]
+
+    get_res = client.get(f"/api/items/{item_id}")
+    assert get_res.status_code == 200
+    assert get_res.json()["title"] == new_item["title"]
+
+
+def test_list_items():
+    res = client.get("/api/items")
+    assert res.status_code == 200
+    assert isinstance(res.json(), list)

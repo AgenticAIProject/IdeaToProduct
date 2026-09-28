@@ -58,7 +58,7 @@ def Documentation_Agent(state: AgentState) -> dict:
         [f"- File: `{filename}` ({len(content)} chars)" for filename, content in code_files.items()]
     ) or "No code files provided."
 
-    llm = imports.get_llm(max_tokens=2000)
+    llm = imports.get_llm(agent_type="documentation", max_tokens=2000)
 
     doc_llm = llm.with_structured_output(
         DocumentationDocument,

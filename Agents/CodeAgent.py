@@ -345,7 +345,7 @@ def Code_Agent(state: AgentState) -> AgentState:
     requirements = state["requirements"]
     project_id   = state["project_id"]
 
-    llm = imports.get_llm(max_tokens=8000)
+    llm = imports.get_llm(agent_type="code", max_tokens=8000)
 
     code_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/code_prompt.txt"))
 

@@ -52,7 +52,7 @@ def Test_Agent(state: AgentState) -> dict:
         }
 
     # 1. Initialize LLM
-    llm = imports.get_llm(max_tokens=2000)
+    llm = imports.get_llm(agent_type="test", max_tokens=2000)
 
     test_generator_llm = llm.with_structured_output(
         TestSuiteGeneration,

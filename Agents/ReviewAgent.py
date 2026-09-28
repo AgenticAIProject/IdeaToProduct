@@ -14,7 +14,7 @@ def Review_Agent(state: imports.AgentState) -> imports.AgentState:
     # 1. Create LLM
     # ---------------------------------------------------------
 
-    llm = imports.get_llm(max_tokens=2000)
+    llm = imports.get_llm(agent_type="review", max_tokens=2000)
 
     # ---------------------------------------------------------
     # 2. Setup Review Prompt

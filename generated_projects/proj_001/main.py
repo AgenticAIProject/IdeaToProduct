@@ -1,66 +1,108 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+"""
+main.py - FastAPI application entrypoint for proj_001
+Problem Statement: Users often struggle to keep track of their daily habits and goals, leading to a lack of progress in personal development.
+Architecture: The Habit Tracker system follows a three-tier distributed architecture:
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///goals.db'
-db = SQLAlchemy(app)
+**Presentation Layer**: Web and mobile client applications (responsive web UI and native/cross-platform mobile apps) that provide the user interface for habit management and progress visualization.
 
-class Goal(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    description = db.Column(db.String(200), nullable=False)
-    completed = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+**Application Layer**: Backend REST API service that handles core business logic including user authentication, habit CRUD operations, progress calculation, and data retrieval. This layer enforces validation and business rules.
 
-    def as_dict(self):
-        return {"id": self.id, "goal": self.description, "completed": self.completed, "created_at": self.created_at}
+**Data Layer**: Relational database for persistent storage of user accounts, habits, daily completion records, and audit logs. Authentication tokens are managed securely with appropriate expiration policies.
 
-@app.before_first_request
-def create_tables():
-    db.create_all()
+**Key Interactions**:
+1. Users authenticate via login/registration endpoints; successful authentication returns secure session/JWT tokens
+2. Authenticated requests to habit endpoints include tokens; API validates token and user context
+3. Clients fetch habit data and render UI locally; completion updates are sent to API and persisted
+4. Progress queries aggregate completion records from database and return aggregated metrics/raw data for visualization
+5. Data flows through validation layers at both API and database levels
 
-@app.route('/api/goals', methods=['POST'])
-def create_goal():
-    data = request.json
-    if not data or 'goal' not in data:
-        return jsonify({'message': 'Goal description is required.'}), 400
-    existing_goal = Goal.query.filter_by(description=data['goal']).first()
-    if existing_goal:
-        return jsonify({'message': 'Goal already exists.'}), 400
-    goal = Goal(description=data['goal'])
-    db.session.add(goal)
-    db.session.commit()
-    return jsonify(goal.as_dict()), 201
+The architecture is designed for scalability with stateless API servers (enabling horizontal scaling) and database indexing on frequently-queried fields (user_id, habit_id, completion_date).
+"""
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from contextlib import asynccontextmanager
 
-@app.route('/api/goals', methods=['GET'])
-def get_goals():
-    goals = Goal.query.all()
-    return jsonify([goal.as_dict() for goal in goals])
+from models import init_db, get_db, Item, UserRecord
+from schemas import ItemCreate, ItemResponse, UserCreate, UserResponse
 
-@app.route('/api/goals/<int:id>', methods=['DELETE'])
-def delete_goal(id):
-    goal = Goal.query.get(id)
-    if goal is None:
-        return jsonify({'message': 'Goal not found.'}), 404
-    db.session.delete(goal)
-    db.session.commit()
-    return '', 204
 
-@app.route('/api/goals/completed', methods=['GET'])
-def get_completed_goals():
-    completed_goals = Goal.query.filter_by(completed=True).order_by(Goal.created_at.desc()).all()
-    return jsonify([goal.as_dict() for goal in completed_goals])
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize SQLite database tables on startup
+    init_db()
+    yield
 
-@app.route('/api/goals/<int:id>', methods=['PATCH'])
-def update_goal_completion(id):
-    goal = Goal.query.get(id)
-    if goal is None:
-        return jsonify({'message': 'Goal not found.'}), 404
-    data = request.json
-    if 'completed' in data:
-        goal.completed = data['completed']
-        db.session.commit()
-    return jsonify(goal.as_dict())
 
-if __name__ == '__main__':
-    app.run(debug=True)
+app = FastAPI(
+    title="Proj_001 API",
+    description="Auto-generated implementation for proj_001",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+
+@app.get("/")
+def root():
+    return {
+        "project": "proj_001",
+        "status": "online",
+        "endpoints": ["/health", "/docs", "/api/items", "/api/users"]
+    }
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "project_id": "proj_001"}
+
+
+# --- Items CRUD Endpoints ---
+
+@app.post("/api/items", response_model=ItemResponse, status_code=status.HTTP_201_CREATED)
+def create_item(payload: ItemCreate, db: Session = Depends(get_db)):
+    item = Item(
+        title=payload.title,
+        category=payload.category,
+        description=payload.description,
+        status=payload.status
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/api/items", response_model=list[ItemResponse])
+def list_items(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    return db.query(Item).offset(skip).limit(limit).all()
+
+
+@app.get("/api/items/{item_id}", response_model=ItemResponse)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+# --- Users Endpoints ---
+
+@app.post("/api/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(UserRecord).filter(UserRecord.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = UserRecord(name=payload.name, email=payload.email, role=payload.role)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.get("/api/users", response_model=list[UserResponse])
+def list_users(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    return db.query(UserRecord).offset(skip).limit(limit).all()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

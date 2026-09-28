@@ -12,6 +12,7 @@ import json
 import subprocess
 from pathlib import Path
 from datetime import datetime
+import shutil
 
 from langchain_core.tools import tool
 
@@ -39,6 +40,8 @@ def repo_scaffold(project_id: str, files: list[dict]) -> dict:
     Returns a summary dict with the project path and list of written files.
     """
     project_dir = WORKSPACE_ROOT / project_id
+    if project_dir.exists():
+        shutil.rmtree(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     written = []

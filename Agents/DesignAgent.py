@@ -23,7 +23,7 @@ def Design_Agent(state: AgentState) -> AgentState:
 
     requirements = state["requirements"]
 
-    llm = imports.get_llm(max_tokens=3000)
+    llm = imports.get_llm(agent_type="design", max_tokens=3000)
 
     design_llm = llm.with_structured_output(
         DesignDocument,
