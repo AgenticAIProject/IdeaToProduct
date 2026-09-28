@@ -357,12 +357,12 @@ def Code_Agent(state: AgentState) -> AgentState:
                 imports.HumanMessage(content=f"""
 Requirements:
 - Problem: {requirements.get('problem_statement', 'N/A')}
-- Key features: {requirements.get('functional_requirements', [])[:5]}
+- Key features: {[fr.get('description', fr) if isinstance(fr, dict) else fr for fr in requirements.get('functional_requirements', [])[:5]]}
 
 Design:
 - Architecture: {design.get('architecture', 'N/A')}
-- Components: {design.get('components', [])[:5]}
-- API endpoints: {design.get('api_endpoints', [])[:5]}
+- Components: {[c.get('name', c) if isinstance(c, dict) else c for c in design.get('components', [])[:5]]}
+- API endpoints: {[f"{ep.get('method','')}{ep.get('path','')}" if isinstance(ep, dict) else ep for ep in design.get('api_endpoints', [])[:5]]}
 
 Previous Review Feedback: {state.get('review', {}).get('feedback', [])}
 Previous Defects Found: {state.get('review', {}).get('defects', [])}

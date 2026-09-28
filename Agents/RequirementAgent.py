@@ -1,20 +1,65 @@
 from pydantic import BaseModel, Field
 import imports
+from tools import fetch_github_grounding
+
+
+class UserStory(BaseModel):
+    id: str = Field(description="Unique ID, e.g. US-01")
+    actor: str = Field(description="The role or persona (e.g. 'user', 'admin')")
+    story: str = Field(description="Full user story: As a [actor], I want [capability], so that [benefit].")
+    priority: str = Field(description="Must, Should, Could, or Won't")
+
+
+class FunctionalRequirement(BaseModel):
+    id: str = Field(description="Unique ID, e.g. FR-01")
+    description: str = Field(description="Precise system behavior: 'The system shall...'")
+    priority: str = Field(description="Must, Should, Could, or Won't")
+    user_story_ids: list[str] = Field(default_factory=list, description="IDs of related user stories, e.g. ['US-01']")
+
+
+class NonFunctionalRequirement(BaseModel):
+    id: str = Field(description="Unique ID, e.g. NFR-01")
+    category: str = Field(description="Category: performance, security, usability, reliability, scalability, etc.")
+    description: str = Field(description="Quality requirement description")
+
+
+class AcceptanceCriterion(BaseModel):
+    id: str = Field(description="Unique ID, e.g. AC-01")
+    requirement_id: str = Field(description="ID of the functional requirement this validates, e.g. FR-01")
+    description: str = Field(description="Concrete, testable condition. Prefer Given/When/Then format.")
+
+
+class Constraint(BaseModel):
+    id: str = Field(description="Unique ID, e.g. CON-01")
+    description: str = Field(description="A limitation or boundary explicitly established by the problem or user.")
+
+
+class Assumption(BaseModel):
+    id: str = Field(description="Unique ID, e.g. ASM-01")
+    description: str = Field(description="A condition assumed to be true for V1. Can be challenged later.")
+
+
+class OpenQuestion(BaseModel):
+    id: str = Field(description="Unique ID, e.g. OQ-01")
+    question: str = Field(description="An unresolved question that could materially change requirements.")
+    impacts: list[str] = Field(default_factory=list, description="FR or US IDs affected if this question changes, e.g. ['FR-01', 'US-02']")
 
 
 class RequirementsList(BaseModel):
     problem_statement: str
     objectives: list[str]
     actors: list[str]
-    user_stories: list[str]
-    functional_requirements: list[str]
-    non_functional_requirements: list[str] = Field(default_factory=list)
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    constraints: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
+    user_stories: list[UserStory]
+    functional_requirements: list[FunctionalRequirement]
+    non_functional_requirements: list[NonFunctionalRequirement] = Field(default_factory=list)
+    acceptance_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
+    constraints: list[Constraint] = Field(default_factory=list)
+    assumptions: list[Assumption] = Field(default_factory=list)
     in_scope: list[str] = Field(default_factory=list, description="List of specific features and items that are in scope.")
     out_of_scope: list[str] = Field(default_factory=list, description="List of specific features and items that are out of scope.")
-    open_questions: list[str] = Field(default_factory=list)
+    open_questions: list[OpenQuestion] = Field(default_factory=list)
+
+
 
 
 class ClarificationResponse(BaseModel):
@@ -86,39 +131,20 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
         }
 
     # ---------------------------------------------------------
-    # 6. Market & Developer Issue Grounding (Phase 3)
+    # 6. Developer Issue Grounding (Phase 3)
     # ---------------------------------------------------------
-    from tools import market_check, github_issues_check
 
-    # print("  [Grounding] Querying Kaggle Startup Success benchmark...")
-    market_data = {} # market_check.invoke({"idea": state["idea"]})
-    # print(f"  [Grounding] Sector: {market_data.get('category')} | Viability: {market_data.get('viability_score')}/10 ({market_data.get('verdict')})")
-
-    idea_keywords = [w for w in state["idea"].lower().split() if len(w) > 3]
     print("  [Grounding] Querying GH Archive for real developer issue patterns...")
-    github_data = github_issues_check.invoke({"keywords": idea_keywords[:5]})
-    print(f"  [Grounding] Retrieved {github_data.get('issue_count', 0)} related developer issue cases ({github_data.get('source')})")
-
-    # Format issue summaries
-    issues_summary = []
-    for issue in github_data.get("issues", []):
-        issues_summary.append(f"- [{issue.get('repo')}] {issue.get('title')}: {issue.get('body')[:150]}")
-    issues_text = "\n".join(issues_summary) if issues_summary else "No specific edge cases retrieved."
+    grounding_result = fetch_github_grounding.invoke({"idea": state["idea"]})
+    github_data = grounding_result["github_data"]
+    issues_text  = grounding_result["issues_text"]
 
     grounding_prompt = imports.SystemMessage(content=f"""
-Market Grounding Evidence (Kaggle Startup Success Dataset):
-- Category: {market_data.get('category')}
-- Historical Success Rate: {market_data.get('success_rate', 0.40) * 100:.0f}%
-- Market Viability Score: {market_data.get('viability_score')}/10 (Verdict: {market_data.get('verdict')})
-- Top Incumbent Competitors: {', '.join(market_data.get('similar_products', []))}
-- Critical Failure Modes to Avoid: {', '.join(market_data.get('risks', []))}
-- Key V1 Factors: {', '.join(market_data.get('critical_factors', []))}
-
 Empirical Developer Issues & Edge Cases (GH Archive):
 {issues_text}
 
-INSTRUCTION: Use the above market signals and real developer issues to directly inform your:
-1. Acceptance criteria (include safeguards against the failure modes and edge cases above)
+INSTRUCTION: Use the above real developer issues to directly inform your:
+1. Acceptance criteria (include safeguards against the edge cases above)
 2. Constraints and assumptions
 3. Non-functional requirements (scalability, security, input validation)
 """)
@@ -150,7 +176,6 @@ INSTRUCTION: Use the above market signals and real developer issues to directly 
     return {
         "requirements":          output_requirements,
         "requirements_version":  state["requirements_version"] + 1,
-        "market_analysis":       market_data,
         "github_evidence":       github_data.get("issues", []),
         "clarification_questions": [],
         "current_stage":         "requirements",

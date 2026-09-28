@@ -277,3 +277,34 @@ def github_issues_check(keywords: list[str]) -> dict:
         "issue_count": len(issues),
         "issues": issues
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# fetch_github_grounding  (high-level wrapper — accepts idea string directly)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@tool
+def fetch_github_grounding(idea: str) -> dict:
+    """
+    High-level grounding tool. Accepts a raw idea string, extracts keywords,
+    queries GitHub issues, and returns a formatted summary ready for LLM prompts.
+
+    Returns a dict with:
+        issues_text  : formatted string of developer issues for prompt injection
+        github_data  : raw result from github_issues_check (issues list, source)
+    """
+    keywords = [w for w in idea.lower().split() if len(w) > 3]
+    raw = github_issues_check.invoke({"keywords": keywords[:5]})
+
+    issues_summary = [
+        f"- [{issue.get('repo')}] {issue.get('title')}: {issue.get('body', '')[:150]}"
+        for issue in raw.get("issues", [])
+    ]
+    issues_text = "\n".join(issues_summary) if issues_summary else "No specific edge cases retrieved."
+
+    print(f"  [Grounding] Retrieved {raw.get('issue_count', 0)} related developer issue cases ({raw.get('source')})")
+
+    return {
+        "issues_text": issues_text,
+        "github_data": raw
+    }

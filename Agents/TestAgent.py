@@ -4,9 +4,20 @@ from State_definition import AgentState
 from test_runner import run_code_tests
 
 
+class TestCase(BaseModel):
+    id: str = Field(description="Unique test case ID, e.g. TC-01")
+    acceptance_criterion_id: str = Field(description="The AC ID this test validates, e.g. AC-01")
+    description: str = Field(description="What this test case verifies")
+    test_function_name: str = Field(description="The Python function name, e.g. test_create_goal")
+
+
 class TestSuiteGeneration(BaseModel):
     test_plan: str = Field(
         description="A concise summary of what acceptance criteria and edge cases are being tested."
+    )
+    test_cases: list[TestCase] = Field(
+        default_factory=list,
+        description="Structured list of test cases mapping to AC IDs."
     )
     test_file_name: str = Field(
         default="test_verification.py",

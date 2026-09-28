@@ -1,7 +1,5 @@
 
 from typing import TypedDict
-
-
 from typing import TypedDict
 
 
@@ -51,8 +49,6 @@ class AgentState(TypedDict):
 
     # Approval
     approval_status: str
-
-
 
 # agent states 
 # tools filewriting, github access, commit, etcc..

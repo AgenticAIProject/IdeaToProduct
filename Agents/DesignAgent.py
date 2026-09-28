@@ -3,17 +3,25 @@ from pydantic import BaseModel, Field
 from State_definition import AgentState
 
 
+class DesignComponent(BaseModel):
+    name: str = Field(description="Component name, e.g. 'GoalService'")
+    responsibility: str = Field(description="What this component does")
+    requirement_ids: list[str] = Field(default_factory=list, description="FR IDs this component implements, e.g. ['FR-01', 'FR-02']")
+
+
+class APIEndpoint(BaseModel):
+    method: str = Field(description="HTTP method: GET, POST, PUT, DELETE")
+    path: str = Field(description="Route path, e.g. /api/goals")
+    description: str = Field(description="What this endpoint does")
+    requirement_ids: list[str] = Field(default_factory=list, description="FR IDs this endpoint satisfies")
+
+
 class DesignDocument(BaseModel):
-    architecture: str
-
-    components: list[str] = Field(default_factory=list)
-
+    architecture: str = Field(description="High-level architecture description")
+    components: list[DesignComponent] = Field(default_factory=list)
     data_model: list[str] = Field(default_factory=list)
-
-    api_endpoints: list[str] = Field(default_factory=list)
-
+    api_endpoints: list[APIEndpoint] = Field(default_factory=list)
     decisions: list[str] = Field(default_factory=list)
-
     edge_cases: list[str] = Field(default_factory=list)
 
 
