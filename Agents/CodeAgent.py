@@ -14,7 +14,7 @@ Strictly obeys the DesignDocument contract:
 - Separates Code Agent implementation decisions from Design Agent design decisions.
 - Maintains requirement and design traceability on every generated file.
 """
-  
+
 import ast
 import json
 import re

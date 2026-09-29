@@ -1,13 +1,13 @@
 /* ─────────────────────────────────────────────────
-   IdeaToProduct — app.js
-   Orchestrates: landing → pipeline → studio
-   Real API: /api/start, /api/status, /api/answer
-   Mock data: window.MockData (mock-data.js)
-   ───────────────────────────────────────────────── */
+  IdeaToProduct — app.js
+  Orchestrates: landing → pipeline → studio
+  Real API: /api/start, /api/status, /api/answer
+  Mock data: window.MockData (mock-data.js)
+  ───────────────────────────────────────────────── */
 'use strict';
 
 /* ── Config ──────────────────────────────────── */
-const API = 'http://localhost:8000';
+const API = (window.location.origin && window.location.origin.startsWith('http')) ? window.location.origin : 'http://localhost:8000';
 
 /* ── State ───────────────────────────────────── */
 const State = {
