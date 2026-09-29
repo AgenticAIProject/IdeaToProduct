@@ -40,9 +40,15 @@ class EdgeCase(BaseModel):
     component_ids: list[str] = Field(default_factory=list)
 
 
+class TechnologyChoice(BaseModel):
+    category: str = Field(description="Category of choice, e.g. 'backend', 'database', 'frontend', 'cli'")
+    technology: str = Field(description="Selected technology name, e.g. 'FastAPI', 'PostgreSQL', 'React'")
+    reason: str = Field(description="Reason for selection")
+
+
 class DesignDocument(BaseModel):
     system_type: str = Field(
-        description="Type of system being built, e.g. 'full-stack web app', 'CLI tool', 'frontend-only SPA', 'REST API'."
+        description="Type of system being built, e.g. 'Frontend web application', 'Backend REST API', 'CLI application', 'Data processing application'."
     )
 
     architecture: str = Field(
@@ -58,6 +64,14 @@ class DesignDocument(BaseModel):
     )
 
     api_endpoints: list[APIEndpoint] = Field(
+        default_factory=list
+    )
+
+    external_integrations: list[str] = Field(
+        default_factory=list
+    )
+
+    technology_choices: list[TechnologyChoice] = Field(
         default_factory=list
     )
 

@@ -53,10 +53,18 @@ def Documentation_Agent(state: AgentState) -> dict:
     test_results = state.get("test_results", {})
     review = state.get("review", {})
 
-    code_files = code_artifact.get("files", {})
-    code_summary = "\n".join(
-        [f"- File: `{filename}` ({len(content)} chars)" for filename, content in code_files.items()]
-    ) or "No code files provided."
+    code_files = code_artifact.get("files", [])
+    if isinstance(code_files, list):
+        code_summary = "\n".join(
+            [f"- File: `{f.get('path', '')}` ({len(f.get('content', ''))} chars)" for f in code_files if isinstance(f, dict)]
+        )
+    elif isinstance(code_files, dict):
+        code_summary = "\n".join(
+            [f"- File: `{filename}` ({len(content)} chars)" for filename, content in code_files.items()]
+        )
+    else:
+        code_summary = ""
+    code_summary = code_summary or "No code files provided."
 
     llm = imports.get_llm(agent_type="documentation", max_tokens=2000)
 
