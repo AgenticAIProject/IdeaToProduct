@@ -1,0 +1,7 @@
+Review Methodology:
+
+1. Consistency Check: Ensure requirements match design and code implementations.
+2. Completeness Check: Ensure no missing features or unhandled edge cases.
+3. Quality Check: Look for best practices, maintainability, and clean architecture.
+4. Defect Identification: Highlight any test failures, potential bugs, or performance issues.
+5. Final Verdict: If defects are critical, reject the build. Otherwise, approve.

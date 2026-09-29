@@ -1,0 +1,125 @@
+{
+  "system_type": "Frontend web application",
+  "architecture": "A single-page browser-based application that stores health data locally in the user's browser. The application consists of a UI layer for data entry and a dashboard view, with a local storage manager handling persistence. No backend server is required for this V1 scope.",
+  "components": [
+    {
+      "id": "COMP-01",
+      "name": "Input Form Component",
+      "responsibility": "Captures user input for steps and water intake, performs client-side validation, and sanitizes inputs.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-04",
+        "NFR-01",
+        "NFR-03"
+      ]
+    },
+    {
+      "id": "COMP-02",
+      "name": "Dashboard Component",
+      "responsibility": "Retrieves and displays the current day's health data from local storage.",
+      "requirement_ids": [
+        "FR-03",
+        "NFR-02"
+      ]
+    },
+    {
+      "id": "COMP-03",
+      "name": "Storage Manager",
+      "responsibility": "Handles reading and writing of daily health data to the browser's LocalStorage.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-03",
+        "ASM-02"
+      ]
+    }
+  ],
+  "data_entities": [
+    {
+      "id": "DE-01",
+      "name": "DailyHealthLog",
+      "purpose": "Stores the steps and water intake for a specific date.",
+      "attributes": [
+        "date",
+        "steps",
+        "waterIntakeMl"
+      ],
+      "relationships": [],
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-03",
+        "ASM-02"
+      ]
+    }
+  ],
+  "api_endpoints": [],
+  "external_integrations": [],
+  "technology_choices": [
+    {
+      "category": "frontend",
+      "technology": "HTML/CSS/JS",
+      "reason": "Simplest stack for a browser-based dashboard without backend requirements."
+    },
+    {
+      "category": "database",
+      "technology": "LocalStorage",
+      "reason": "Provides persistent storage for a single-user local instance without needing a server or database infrastructure."
+    }
+  ],
+  "design_decisions": [
+    {
+      "id": "DD-01",
+      "decision": "Use browser LocalStorage for data persistence.",
+      "reason": "Eliminates the need for a backend server, keeping the V1 architecture simple and cost-effective.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-03"
+      ]
+    },
+    {
+      "id": "DD-02",
+      "decision": "Client-side only architecture.",
+      "reason": "The requirements do not specify multi-user support or cloud synchronization, making a client-side app sufficient.",
+      "requirement_ids": [
+        "CON-01"
+      ]
+    }
+  ],
+  "edge_cases": [
+    {
+      "id": "EC-01",
+      "description": "User attempts to input non-numeric characters or negative numbers.",
+      "requirement_ids": [
+        "FR-04",
+        "NFR-03"
+      ],
+      "component_ids": [
+        "COMP-01"
+      ]
+    },
+    {
+      "id": "EC-02",
+      "description": "No data exists for the current date when loading the dashboard.",
+      "requirement_ids": [
+        "FR-03"
+      ],
+      "component_ids": [
+        "COMP-02",
+        "COMP-03"
+      ]
+    },
+    {
+      "id": "EC-03",
+      "description": "LocalStorage is full or disabled by the browser.",
+      "requirement_ids": [
+        "NFR-03"
+      ],
+      "component_ids": [
+        "COMP-03"
+      ]
+    }
+  ]
+}

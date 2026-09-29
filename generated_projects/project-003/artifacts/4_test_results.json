@@ -1,0 +1,15 @@
+{
+  "success": false,
+  "total_tests": 1,
+  "passed_tests": 0,
+  "failed_tests": 1,
+  "errors": [
+    "[WinError 2] The system cannot find the file specified"
+  ],
+  "raw_output": "\n[WinError 2] The system cannot find the file specified",
+  "summary": "Test execution failed",
+  "duration_seconds": 0.03,
+  "test_files": {
+    "test_app.py": "import unittest\nimport json\nfrom unittest.mock import MagicMock\n\nclass LocalStorageMock:\n    def __init__(self):\n        self.store = {}\n    def getItem(self, key):\n        return self.store.get(key)\n    def setItem(self, key, value):\n        self.store[key] = value\n\nclass TestStepTracker(unittest.TestCase):\n    def setUp(self):\n        self.storage = LocalStorageMock()\n\n    def test_save_valid_steps(self):\n        steps = 5000\n        records = []\n        records.append({'date': '2023-10-01', 'step_count': steps})\n        self.storage.setItem('steps', json.dumps(records))\n        \n        stored = json.loads(self.storage.getItem('steps'))\n        self.assertEqual(len(stored), 1)\n        self.assertEqual(stored[0]['step_count'], 5000)\n\n    def test_invalid_input_validation(self):\n        def validate(val):\n            try:\n                num = int(val)\n                return num >= 0\n            except:\n                return False\n        \n        self.assertFalse(validate(-100))\n        self.assertFalse(validate('abc'))\n        self.assertTrue(validate(1000))\n\n    def test_suggestion_engine_calculation(self):\n        records = [{'step_count': 1000} for _ in range(7)]\n        total = sum(r['step_count'] for r in records)\n        avg = total / 7\n        self.assertEqual(avg, 1000)\n\n    def test_suggestion_engine_insufficient_data(self):\n        records = [{'step_count': 1000} for _ in range(3)]\n        self.assertTrue(len(records) < 7)\n        suggestion = 'Log more steps to get a 7-day average suggestion.'\n        self.assertEqual(suggestion, 'Log more steps to get a 7-day average suggestion.')\n\nif __name__ == '__main__':\n    unittest.main()"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "total_tests": 0,
+  "passed_tests": 0,
+  "failed_tests": 0,
+  "errors": [
+    "....\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n"
+  ],
+  "raw_output": "\n....\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+  "summary": "Tests passed successfully",
+  "duration_seconds": 0.13,
+  "test_files": {
+    "test_health_tracker.py": "import unittest\nimport json\nfrom datetime import date\n\nclass MockStorage:\n    def __init__(self):\n        self.data = {}\n    def getItem(self, k):\n        return self.data.get(k)\n    def setItem(self, k, v):\n        self.data[k] = v\n\nclass TestHealthTracker(unittest.TestCase):\n    def setUp(self):\n        self.storage = MockStorage()\n        self.today = date.today().isoformat()\n\n    def validate_input(self, steps, water):\n        if not isinstance(steps, int) or steps < 0 or not isinstance(water, int) or water < 0:\n            return False\n        return True\n\n    def test_save_valid_data(self):\n        data = {'steps': 5000, 'waterIntakeMl': 2000}\n        self.storage.setItem(self.today, json.dumps(data))\n        stored = json.loads(self.storage.getItem(self.today))\n        self.assertEqual(stored['steps'], 5000)\n        self.assertEqual(stored['waterIntakeMl'], 2000)\n\n    def test_input_validation_negative(self):\n        self.assertFalse(self.validate_input(-1, 100))\n        self.assertFalse(self.validate_input(100, -50))\n\n    def test_dashboard_data_retrieval(self):\n        self.storage.setItem(self.today, json.dumps({'steps': 1000, 'waterIntakeMl': 500}))\n        raw_data = self.storage.getItem(self.today)\n        data = json.loads(raw_data)\n        self.assertEqual(data['steps'], 1000)\n        self.assertEqual(data['waterIntakeMl'], 500)\n\n    def test_dashboard_default_values(self):\n        raw_data = self.storage.getItem('non-existent-date') or '{\"steps\": 0, \"waterIntakeMl\": 0}'\n        data = json.loads(raw_data)\n        self.assertEqual(data['steps'], 0)\n        self.assertEqual(data['waterIntakeMl'], 0)\n\nif __name__ == '__main__':\n    unittest.main()"
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "system_type": "Frontend web application",
+  "architecture": "A single-page web application that runs entirely in the user's browser. It uses local browser storage (LocalStorage) to persist step data, eliminating the need for a backend server or database. The application logic handles input validation, data storage, and the calculation of suggestions based on historical data.",
+  "components": [
+    {
+      "id": "COMP-01",
+      "name": "Step Logger UI",
+      "responsibility": "Provides an interface for users to input daily step counts and validates input format.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "NFR-01",
+        "NFR-02"
+      ]
+    },
+    {
+      "id": "COMP-02",
+      "name": "Data Persistence Manager",
+      "responsibility": "Manages reading and writing of step data to the browser's LocalStorage.",
+      "requirement_ids": [
+        "FR-01",
+        "NFR-03"
+      ]
+    },
+    {
+      "id": "COMP-03",
+      "name": "Suggestion Engine",
+      "responsibility": "Calculates the 7-day average of steps and generates personalized feedback for the user.",
+      "requirement_ids": [
+        "FR-03"
+      ]
+    }
+  ],
+  "data_entities": [
+    {
+      "id": "ENT-01",
+      "name": "DailyStepRecord",
+      "purpose": "Stores the step count for a specific date.",
+      "attributes": [
+        "date",
+        "step_count"
+      ],
+      "relationships": [],
+      "requirement_ids": [
+        "FR-01"
+      ]
+    }
+  ],
+  "api_endpoints": [],
+  "external_integrations": [],
+  "technology_choices": [
+    {
+      "category": "frontend",
+      "technology": "HTML/CSS/JS",
+      "reason": "Simple, lightweight, and sufficient for a browser-based mobile-optimized interface."
+    },
+    {
+      "category": "database",
+      "technology": "LocalStorage",
+      "reason": "Meets the V1 requirement for data persistence without the complexity of a backend server."
+    }
+  ],
+  "design_decisions": [
+    {
+      "id": "DD-01",
+      "decision": "Use browser LocalStorage for data persistence.",
+      "reason": "Simplifies architecture by removing the need for a backend and user accounts for V1.",
+      "requirement_ids": [
+        "FR-01"
+      ]
+    },
+    {
+      "id": "DD-02",
+      "decision": "Client-side validation of inputs.",
+      "reason": "Ensures immediate feedback for the user and prevents invalid data from being stored.",
+      "requirement_ids": [
+        "FR-02",
+        "NFR-03"
+      ]
+    }
+  ],
+  "edge_cases": [
+    {
+      "id": "EDGE-01",
+      "description": "User has fewer than 7 days of data available for the suggestion engine.",
+      "requirement_ids": [
+        "FR-03"
+      ],
+      "component_ids": [
+        "COMP-03"
+      ]
+    },
+    {
+      "id": "EDGE-02",
+      "description": "LocalStorage is full or disabled by the browser.",
+      "requirement_ids": [
+        "NFR-03"
+      ],
+      "component_ids": [
+        "COMP-02"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Step Tracker</title><style>body{font-family:sans-serif;padding:20px}#suggestion{margin-top:20px;font-weight:bold;color:#2c3e50}</style></head><body><h1>Step Tracker</h1><div><input type=\"number\" id=\"stepInput\" placeholder=\"Enter steps\"><button id=\"saveBtn\">Save Steps</button><p id=\"error\" style=\"color:red\"></p></div><div id=\"suggestion\"></div><script src=\"app.js\"></script></body></html>",
+      "description": "Main UI for step logging and suggestion display.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-03"
+      ],
+      "design_component_ids": [
+        "COMP-01"
+      ]
+    },
+    {
+      "path": "app.js",
+      "content": "const stepInput = document.getElementById('stepInput');const saveBtn = document.getElementById('saveBtn');const errorEl = document.getElementById('error');const suggestionEl = document.getElementById('suggestion');function getRecords(){return JSON.parse(localStorage.getItem('steps')||'[]')}function saveRecord(steps){const records = getRecords();records.push({date:new Date().toISOString().split('T')[0],step_count:steps});localStorage.setItem('steps',JSON.stringify(records));updateSuggestion()}function updateSuggestion(){const records = getRecords();if(records.length<7){suggestionEl.innerText='Log more steps to get a 7-day average suggestion.';return}const last7 = records.slice(-7).reduce((sum,r)=>sum+r.step_count,0)/7;suggestionEl.innerText=`Your 7-day average is ${Math.round(last7)} steps. Keep it up!`;}saveBtn.addEventListener('click',()=>{const val = parseInt(stepInput.value);if(isNaN(val)||val<0){errorEl.innerText='Please enter a valid non-negative integer.';return}errorEl.innerText='';saveRecord(val);stepInput.value='';});updateSuggestion();",
+      "description": "Logic for input validation, LocalStorage persistence, and suggestion calculation.",
+      "requirement_ids": [
+        "FR-01",
+        "FR-02",
+        "FR-03"
+      ],
+      "design_component_ids": [
+        "COMP-01",
+        "COMP-02",
+        "COMP-03"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "setup_instructions": "Open index.html in any modern web browser. No server setup is required.",
+  "implementation_notes": [
+    "Used vanilla JavaScript for simplicity as per design requirements.",
+    "LocalStorage is used for persistence as specified in DD-01.",
+    "Input validation is performed client-side as per DD-02.",
+    "Suggestion engine calculates the average of the last 7 entries in the array.",
+    "Design decision: Frontend = HTML/CSS/JS (Simple, lightweight, and sufficient for a browser-based mobile-optimized interface.).",
+    "Design decision: Database = LocalStorage (Meets the V1 requirement for data persistence without the complexity of a backend server.).",
+    "Design decision: Using browser client-side storage (LocalStorage) for data persistence."
+  ],
+  "test_command": "No automated test runner required for static HTML/JS; verify by opening in browser and checking console/UI behavior.",
+  "generated_project_path": "C:\\Users\\srujana\\Downloads\\IdeaToProduct-main (1)\\IdeaToProduct-main\\generated_projects\\project-003",
+  "files_written": [
+    "index.html",
+    "app.js"
+  ],
+  "stack": "frontend"
+}
