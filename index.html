@@ -1,347 +1,360 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-theme="dark">
 
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IdeaToProduct — AI Product Studio</title>
-  <meta name="description"
-    content="An autonomous software engineering pipeline that turns product ideas into validated, reviewed software." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IdeaToProduct — Agentic AI Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
-    rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
-  <script>try { document.documentElement.dataset.theme = localStorage.getItem("itp-theme") || "dark" } catch (e) { }</script>
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
 
-  <!-- ═══════════════════════════════════════
-     GLOBAL NAV
-════════════════════════════════════════ -->
-  <nav class="nav" id="mainNav">
-    <div class="nav-inner">
-      <a href="#" class="nav-logo" id="navLogo">
-        <svg class="logo-hex" width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <polygon points="10,1 19,5.5 19,14.5 10,19 1,14.5 1,5.5" stroke="currentColor" stroke-width="1.4"
-            fill="none" />
-          <polygon points="10,5 15,7.8 15,13.2 10,16 5,13.2 5,7.8" fill="currentColor" opacity="0.25" />
+  <!-- ============ INTRO / LANDING ============ -->
+  <main id="intro">
+    <div class="glow-bg"></div>
+
+    <header class="nav-new">
+      <div class="nav-left">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
         </svg>
         <span>IdeaToProduct</span>
-      </a>
-      <!-- landing nav -->
-      <div class="nav-right" id="navLanding">
-        <span class="nav-badge">Alpha</span>
-        <a href="#how-it-works" class="nav-link">How it works</a>
       </div>
-      <!-- studio nav (shown when in studio) -->
-      <div class="nav-right nav-studio hidden" id="navStudio">
-        <span class="studio-project-name" id="studioProjectName">—</span>
-        <div class="pipeline-status-pill" id="navPipelineStatus">
-          <span class="pill-dot"></span>
-          <span class="pill-label" id="navPipelineLabel">Initializing</span>
-        </div>
-        <button class="ghost-btn-sm" onclick="exitStudio()">Exit</button>
-      </div>
-    </div>
-  </nav>
-
-  <!-- ═══════════════════════════════════════
-     SCREEN: LANDING
-════════════════════════════════════════ -->
-  <section id="screenLanding" class="screen screen-landing">
-    <div class="landing-bg-grid"></div>
-    <div class="fx-ghost" aria-hidden="true">IDEATOPRODUCT</div>
-    <div class="landing-orb landing-orb-a"></div>
-    <div class="landing-orb landing-orb-b"></div>
-
-    <div class="landing-body">
-      <!-- Left -->
-      <div class="landing-left" id="landingLeft">
-        <p class="landing-eyebrow">
-          <span class="eyebrow-dot"></span>
-          Autonomous engineering pipeline
-        </p>
-        <h1 class="landing-heading">
-          <span class="lh-line">Turn your</span>
-          <span class="lh-line lh-outline">idea into</span>
-          <span class="lh-line">a product.</span>
-        </h1>
-        <p class="landing-sub">An autonomous software engineering pipeline that turns product ideas into validated,
-          reviewed software — requirement to documentation.</p>
-        <div class="landing-stats">
-          <div class="lst"><span class="lst-val">6</span><span class="lst-lbl">Agents</span></div>
-          <div class="lst-div"></div>
-          <div class="lst"><span class="lst-val">100%</span><span class="lst-lbl">Automated</span></div>
-          <div class="lst-div"></div>
-          <div class="lst"><span class="lst-val">0</span><span class="lst-lbl">Config required</span></div>
-        </div>
-        <div class="hero-pipeline" aria-label="Six agent pipeline">
-          <div class="hero-pipeline-head"><span>IDEA</span><span>PRODUCT</span></div>
-          <div class="hero-pipeline-track">
-            <span class="hero-node active">01</span><span class="hero-node">02</span><span
-              class="hero-node">03</span><span class="hero-node">04</span><span class="hero-node">05</span><span
-              class="hero-node">06</span>
-            <span class="hero-signal"></span>
-          </div>
-          <div class="hero-pipeline-labels">
-            <span>Requirements</span><span>Design</span><span>Code</span><span>Tests</span><span>Review</span><span>Docs</span>
+      <div class="nav-right">
+        <span class="badge" id="alphaBadge" style="cursor:pointer;" title="Click for info">ALPHA</span>
+        <button id="howItWorksBtn" class="nav-link-btn">How it works</button>
+        <div class="lamp-pull-container" id="themeToggleBtn" title="Toggle Theme">
+          <div class="lamp-line"></div>
+          <div class="lamp-bead"></div>
+          <div class="lamp-bulb">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M9 21h6v-2H9v2zm3-19a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+            </svg>
           </div>
         </div>
       </div>
+    </header>
 
-      <!-- Right: idea input -->
-      <div class="landing-right" id="landingRight">
-        <div class="idea-card" id="ideaCard">
-          <div class="idea-card-scan"></div>
-          <div class="ic-live-state"><span class="ic-live-dot"></span><span>READY TO BUILD</span></div>
-          <div class="ic-header">
-            <span class="ic-step">01</span>
-            <span class="ic-title">Describe what you want to build</span>
-          </div>
-          <div class="ic-textarea-wrap">
-            <textarea id="ideaInput" class="ic-textarea" placeholder="Describe what you want to build…" maxlength="800"
-              rows="5"></textarea>
-            <div class="ic-underline" id="icUnderline"></div>
-          </div>
-          <div class="ic-examples">
-            <span class="ic-ex-label">Try:</span>
-            <button class="ic-chip" onclick="fillIdea(this)"
-              data-idea="A minimalist habit tracker where users set daily goals, check them off, and build streaks. Reset at midnight, weekly email summary on Sunday.">Habit
-              tracker</button>
-            <button class="ic-chip" onclick="fillIdea(this)"
-              data-idea="An expense splitter for groups of friends. Log shared expenses, split by equal share or percentage, track who owes what, and settle debts.">Expense
-              splitter</button>
-            <button class="ic-chip" onclick="fillIdea(this)"
-              data-idea="A team knowledge base with markdown editing, tag-based search, version history, and export to PDF. No login required for read access.">Knowledge
-              base</button>
-          </div>
-          <!-- Interpreting panel (shown while typing) -->
-          <div class="ic-interpret" id="icInterpret" style="display:none">
-            <div class="ici-label">Interpreting idea</div>
-            <div class="ici-rows">
-              <div class="ici-row"><span class="ici-key">Product type</span><span class="ici-val" id="iciType">—</span>
-              </div>
-              <div class="ici-row"><span class="ici-key">Core workflow</span><span class="ici-val"
-                  id="iciWorkflow">—</span></div>
-              <div class="ici-row"><span class="ici-key">Features detected</span><span class="ici-val"
-                  id="iciFeatures">—</span></div>
-            </div>
-          </div>
-          <div class="ic-footer">
-            <span class="ic-char-count"><span id="charCount">0</span><span class="ic-char-max"> / 800</span></span>
-            <button class="cta-btn" id="launchBtn" onclick="launchPipeline()">
-              <span id="launchBtnLabel">Launch Pipeline</span>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
+    <section class="hero-new">
+      <div class="eyebrow-new">
+        <span class="dot"></span> AUTONOMOUS ENGINEERING PIPELINE
       </div>
-    </div>
-  </section>
+      <h1 class="huge-title">
+        <div class="solid" id="typeLine1"></div>
+        <div class="outline" id="typeLine2"></div>
+        <div class="solid" id="typeLine3"><span class="cursor"></span></div>
+      </h1>
+      <p class="subtitle">
+        An autonomous software engineering pipeline that turns product<br>
+        ideas into validated, reviewed software — requirement to<br>
+        documentation.
+      </p>
 
-  <!-- ═══════════════════════════════════════
-     SCREEN: STUDIO (workspace)
-════════════════════════════════════════ -->
-  <section id="screenStudio" class="screen screen-studio hidden">
-
-    <!-- Sidebar -->
-    <aside class="studio-sidebar" id="studioSidebar">
-
-      <!-- Project -->
-      <div class="sb-project">
-        <div class="sb-proj-name" id="sbProjName">—</div>
-        <div class="sb-proj-status" id="sbProjStatus">
-          <span class="status-dot" id="sbStatusDot"></span>
-          <span id="sbStatusLabel">Initializing</span>
-        </div>
-      </div>
-
-      <!-- Pipeline stage list -->
-      <div class="sb-section-label">Pipeline</div>
-      <nav class="sb-nav" id="sbNav">
-        <button class="sb-item active" data-view="overview" onclick="switchView('overview')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
-            <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
-            <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
-            <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
-            <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
-          </svg>
-          Overview
-        </button>
-        <div class="sb-pipeline-stages" id="sbPipelineStages">
-          <!-- Injected by JS -->
-        </div>
-      </nav>
-
-      <div class="sb-section-label">Project</div>
-      <nav class="sb-nav">
-        <button class="sb-item" data-view="artifacts" onclick="switchView('artifacts')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
-            <path d="M3 2h7l4 4v9H3V2z" stroke="currentColor" stroke-width="1.2" />
-            <path d="M10 2v4h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-          </svg>
-          Artifacts
-        </button>
-        <button class="sb-item" data-view="memory" onclick="switchView('memory')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2" />
-            <path d="M8 5v3.5l2.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-          </svg>
-          Memory
-        </button>
-      </nav>
-
-      <!-- Activity -->
-      <div class="sb-section-label sb-activity-label">
-        Activity
-        <span class="sb-activity-count" id="sbActivityCount">0</span>
-      </div>
-      <div class="sb-activity-feed" id="sbActivityFeed">
-        <!-- Injected by JS -->
-      </div>
-    </aside>
-
-    <!-- Main content -->
-    <main class="studio-main" id="studioMain">
-      <!-- Views injected by JS -->
-      <div id="view-overview" class="studio-view"></div>
-      <div id="view-requirement" class="studio-view hidden"></div>
-      <div id="view-design" class="studio-view hidden"></div>
-      <div id="view-code" class="studio-view hidden"></div>
-      <div id="view-test" class="studio-view hidden"></div>
-      <div id="view-review" class="studio-view hidden"></div>
-      <div id="view-documentation" class="studio-view hidden"></div>
-      <div id="view-artifacts" class="studio-view hidden"></div>
-      <div id="view-memory" class="studio-view hidden"></div>
-    </main>
-  </section>
-
-  <!-- ═══════════════════════════════════════
-     SECTION: HOW IT WORKS
-════════════════════════════════════════ -->
-  <section class="hiw-section" id="how-it-works">
-    <div class="hiw-inner">
-      <div class="hiw-hd">
-        <span class="hiw-eyebrow">Under the hood</span>
-        <h2 class="hiw-title">Six agents.<br>One pipeline.</h2>
-      </div>
-      <div class="hiw-grid">
-        <div class="hiw-card" data-agent="requirements">
-          <span class="hiw-num">01</span>
-          <h3>Requirements</h3>
-          <p class="hiw-default">Converts ideas into user stories, functional requirements, acceptance criteria, and
-            scope boundaries.</p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>Raw product idea</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>User stories · Scope · Acceptance
-                criteria</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Requirements artifact</span></div>
-          </div>
-        </div>
-        <div class="hiw-card" data-agent="design">
-          <span class="hiw-num">02</span>
-          <h3>Design</h3>
-          <p class="hiw-default">Produces architecture decisions, component diagrams, data models, and API surface
-            definitions.</p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>Requirements</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>Architecture · Components · APIs · Data
-                models</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Design artifact</span></div>
-          </div>
-        </div>
-        <div class="hiw-card" data-agent="code">
-          <span class="hiw-num">03</span>
-          <h3>Code</h3>
-          <p class="hiw-default">Scaffolds the repository and generates working source files using <span
-              class="mono">claude-sonnet-4-6</span>.</p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>Design artifact</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>Repository scaffold · Source files ·
-                Dependencies</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Working project on disk</span></div>
-          </div>
-        </div>
-        <div class="hiw-card" data-agent="tests">
-          <span class="hiw-num">04</span>
-          <h3>Tests</h3>
-          <p class="hiw-default">Executes pytest against the generated project. Returns real pass/fail counts from
-            actual execution.</p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>Generated project</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>pytest execution · Coverage · Error
-                capture</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Pass / Fail / Error counts</span></div>
-          </div>
-        </div>
-        <div class="hiw-card" data-agent="review">
-          <span class="hiw-num">05</span>
-          <h3>Review</h3>
-          <p class="hiw-default">Hard quality gate. Independently evaluates consistency across all stages. Can trigger a
-            rework cycle.</p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>All prior artifacts</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>Cross-stage consistency · Security ·
-                Quality</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Approved or rework required</span></div>
-          </div>
-        </div>
-        <div class="hiw-card" data-agent="docs">
-          <span class="hiw-num">06</span>
-          <h3>Documentation</h3>
-          <p class="hiw-default">Generates user-facing and developer documentation from approved, reviewed artifacts.
-          </p>
-          <div class="hiw-detail">
-            <div class="hiw-ipo"><span class="ipo-tag in">INPUT</span><span>Approved artifacts</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag proc">PROCESS</span><span>README · API docs · Architecture ·
-                Setup</span></div>
-            <div class="hiw-ipo"><span class="ipo-tag out">OUTPUT</span><span>Documentation artifact</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- FOOTER -->
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <span class="footer-logo">IdeaToProduct</span>
-      <span class="footer-credits">LangGraph · OpenRouter · Claude · FastAPI</span>
-    </div>
-  </footer>
-
-  <!-- Clarification overlay -->
-  <div class="overlay hidden" id="clarifyOverlay">
-    <div class="clarify-modal">
-      <div class="cm-badge">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.2" />
-          <path d="M6 3.5v3M6 8v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
-        Clarification needed
-      </div>
-      <h2 class="cm-title">Help the agent understand your idea</h2>
-      <p class="cm-sub">Answer in as much detail as you'd like. More context produces better output.</p>
-      <div class="cm-questions" id="cmQuestions"></div>
-      <div class="cm-actions">
-        <button class="cta-btn" onclick="submitClarification()">
-          <span>Continue pipeline</span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+      <div class="input-card-new">
+        <textarea id="ideaInput" rows="2" maxlength="500" placeholder="Enter your idea to begin..."></textarea>
+        <button class="btn-launch" id="launchBtn" onclick="launchStudio()">
+          <span id="launchLabel">Launch</span>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round" />
           </svg>
         </button>
       </div>
+    </section>
+
+    <!-- Floating Widgets -->
+    <div class="widget widget-left">
+      <div class="w-head">requirements.agent</div>
+      <div class="w-body">
+        <div class="w-line"><span class="num">1</span> <span class="arr">></span> extracting user stories</div>
+        <div class="w-line"><span class="num">2</span> <span class="chk">✓</span> <span class="hl">12</span>
+          requirements</div>
+      </div>
+    </div>
+
+    <div class="widget widget-right">
+      <div class="w-head">design.agent</div>
+      <div class="w-body">
+        <div class="w-line"><span class="num">1</span> <span class="arr">></span> generating
+          component<br>&nbsp;&nbsp;&nbsp;graph</div>
+        <div class="w-line"><span class="num">2</span> <span class="chk">✓</span> <span class="hl">8</span> components,
+          <span class="hl">6</span> APIs</div>
+      </div>
+    </div>
+
+    <!-- Stats footer -->
+    <div class="stats-row">
+      <div class="stat-col">
+        <div class="stat-num">6</div>
+        <div class="stat-label">AGENTS</div>
+      </div>
+      <div class="stat-col">
+        <div class="stat-num">100%</div>
+        <div class="stat-label">AUTOMATED</div>
+      </div>
+      <div class="stat-col">
+        <div class="stat-num">0</div>
+        <div class="stat-label">CONFIG REQUIRED</div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ============ ANTIGRAV IDE STUDIO ============ -->
+  <div id="studio" class="studio" hidden>
+
+    <!-- Top Bar -->
+    <header class="topbar">
+      <button class="logo sm" id="homeBtn" onclick="exitStudio()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+        </svg>
+        IdeaToProduct
+      </button>
+      <div class="topbar-center">
+        <span class="proj-name" id="projName">Untitled</span>
+        <span class="status-pill" id="statusPill"><i class="status-dot"></i><b id="statusText">idle</b></span>
+      </div>
+      <div class="topbar-right">
+        <span class="badge alpha-badge-btn" style="cursor:pointer;" title="Click for info">ALPHA</span>
+        <button class="how-it-works-btn nav-link-btn">How it works</button>
+        <span class="elapsed-badge" id="elapsed">00:00</span>
+        <button class="btn sm" id="exportBtn">Export</button>
+        <div class="lamp-pull-container theme-toggle-btn" title="Toggle Theme">
+          <div class="lamp-line"></div>
+          <div class="lamp-bead"></div>
+          <div class="lamp-bulb">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M9 21h6v-2H9v2zm3-19a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 3-Column IDE Body -->
+    <div class="ide-body">
+
+      <!-- LEFT: Agents + File Tree -->
+      <aside class="panel panel-left">
+        <div class="panel-section">
+          <div class="panel-title">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2 4h12v1H2zm0 3.5h12v1H2zm0 3.5h12v1H2z" />
+            </svg>
+            Agent Pipeline
+          </div>
+          <ul class="agent-list" id="agentList">
+            <li class="agent-item" data-step="requirement">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Requirement Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+            <li class="agent-item" data-step="design">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Design Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+            <li class="agent-item" data-step="code">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Code Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+            <li class="agent-item" data-step="test">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Test Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+            <li class="agent-item" data-step="review">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Review Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+            <li class="agent-item" data-step="documentation">
+              <span class="agent-dot"></span>
+              <span class="agent-name">Doc Agent</span>
+              <span class="agent-status">pending</span>
+            </li>
+          </ul>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1 2h6v6H1zm8 0h6v3H9zm0 5h6v6H9zM1 10h6v3H1z" />
+            </svg>
+            Generated Files <em id="fileCount">0</em>
+          </div>
+          <ul class="file-tree" id="fileTree">
+            <li class="file-empty">files appear as agents generate them</li>
+          </ul>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M8 5v4l2.5 1.5" />
+            </svg>
+            Project
+          </div>
+          <dl class="meta-grid">
+            <dt>id</dt>
+            <dd id="metaId">—</dd>
+            <dt>mode</dt>
+            <dd id="metaMode">live</dd>
+            <dt>elapsed</dt>
+            <dd id="metaTime">00:00</dd>
+          </dl>
+        </div>
+      </aside>
+
+      <!-- CENTER: Terminal + Code Editor -->
+      <section class="panel panel-center">
+        <!-- Tabs -->
+        <div class="center-tabs">
+          <button class="ctab active" data-tab="terminal" onclick="switchCenterTab(this)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2 3l5 5-5 5M9 13h5" />
+            </svg>
+            Live Terminal
+          </button>
+          <button class="ctab" data-tab="editor" onclick="switchCenterTab(this)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M5 2l-3 6 3 6M11 2l3 6-3 6" />
+            </svg>
+            Code Editor
+          </button>
+          <button class="ctab" data-tab="preview" onclick="switchCenterTab(this)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 3C4.5 3 1.7 6.1 1 8c.7 1.9 3.5 5 7 5s6.3-3.1 7-5c-.7-1.9-3.5-5-7-5z" fill="none"
+                stroke="currentColor" stroke-width="1.3" />
+              <circle cx="8" cy="8" r="2" />
+            </svg>
+            Preview
+          </button>
+        </div>
+
+        <!-- Terminal Panel -->
+        <div class="center-content" id="panel-terminal">
+          <div class="term-chrome">
+            <span class="term-dot red"></span>
+            <span class="term-dot yellow"></span>
+            <span class="term-dot green"></span>
+            <span class="term-title">agent-pipeline@antigrav:~</span>
+          </div>
+          <pre class="term-body" id="termOutput"><span class="t-dim">// Waiting for pipeline to start...</span></pre>
+        </div>
+
+        <!-- Code Editor Panel -->
+        <div class="center-content" id="panel-editor" hidden>
+          <div class="editor-tabs" id="editorTabs">
+            <span class="ed-tab-placeholder">files appear here as agents write them</span>
+          </div>
+          <div class="editor-body">
+            <pre class="gutter" id="gutter">1</pre>
+            <pre class="code-area" id="codeArea" tabindex="0"></pre>
+          </div>
+        </div>
+
+        <!-- Preview Panel -->
+        <div class="center-content" id="panel-preview" hidden>
+          <div class="preview-frame">
+            <iframe id="previewFrame" src="about:blank"></iframe>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT: Inspector -->
+      <aside class="panel panel-right">
+        <div class="panel-section">
+          <div class="panel-title">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13.5 3.5l-1-1-4 4-2-2-4 4 1 1 3-3 2 2z" />
+            </svg>
+            Inspector
+          </div>
+          <div class="inspector-tabs" id="inspectorTabs">
+            <button class="itab active" data-view="reasoning" onclick="switchInspector(this)">Reasoning</button>
+            <button class="itab" data-view="properties" onclick="switchInspector(this)">Properties</button>
+            <button class="itab" data-view="activity" onclick="switchInspector(this)">Activity</button>
+          </div>
+        </div>
+
+        <!-- Reasoning -->
+        <div class="inspector-panel" id="insp-reasoning">
+          <div class="reasoning-box" id="reasoningBox">
+            <span class="t-dim">Select an agent step to view its reasoning…</span>
+          </div>
+        </div>
+
+        <!-- Properties -->
+        <div class="inspector-panel" id="insp-properties" hidden>
+          <div class="prop-group"><span class="prop-key">Language</span><span class="prop-val" id="propLang">Python /
+              FastAPI</span></div>
+          <div class="prop-group"><span class="prop-key">Database</span><span class="prop-val"
+              id="propDb">PostgreSQL</span></div>
+          <div class="prop-group"><span class="prop-key">Test Coverage</span><span class="prop-val"
+              id="propCoverage">—</span></div>
+          <div class="prop-group"><span class="prop-key">Files</span><span class="prop-val" id="propFiles">0</span>
+          </div>
+          <div class="prop-group"><span class="prop-key">Errors</span><span class="prop-val ok" id="propErrors">0
+              detected</span></div>
+          <div class="prop-group"><span class="prop-key">Approval</span><span class="prop-val"
+              id="propApproval">pending</span></div>
+        </div>
+
+        <!-- Activity -->
+        <div class="inspector-panel" id="insp-activity" hidden>
+          <div class="activity-feed" id="activityFeed"></div>
+        </div>
+      </aside>
     </div>
   </div>
 
-  <script src="mock-data.js"></script>
+  <!-- Modal for How It Works -->
+  <div class="modal-overlay" id="howItWorksModal" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>How IdeaToProduct Works</h3>
+        <button class="modal-close" id="closeModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Our autonomous 6-agent system transforms your natural language idea into a
+          fully-structured software product:</p>
+        <div class="workflow-steps">
+          <div class="wf-step"><strong>1. Requirement Agent</strong><span>Extracts PRD, problem statement & user
+              stories.</span></div>
+          <div class="wf-step"><strong>2. Design Agent</strong><span>Maps architecture, tech stack & database
+              schemas.</span></div>
+          <div class="wf-step"><strong>3. Code Agent</strong><span>Generates clean FastAPI + Python backend code.</span>
+          </div>
+          <div class="wf-step"><strong>4. Test Agent</strong><span>Runs automated unit & verification test
+              suites.</span></div>
+          <div class="wf-step"><strong>5. Review Agent</strong><span>Audits code quality & security compliance.</span>
+          </div>
+          <div class="wf-step"><strong>6. Doc Agent</strong><span>Produces README, API references & guides.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alpha Info Popover -->
+  <div class="popover-card" id="alphaPopover" hidden>
+    <strong>IdeaToProduct v1.0.0-alpha</strong>
+    <p>Powered by Local Ollama Llama 3.2 AI & LangGraph orchestrator.</p>
+  </div>
+
+  <!-- Real API connection -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="app.js"></script>
 </body>
 

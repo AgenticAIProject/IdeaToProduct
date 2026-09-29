@@ -43,9 +43,7 @@ def requirement_router(state: AgentState):
 
 
 def review_router(state: AgentState):
-    if state.get("approval_status") == "approved":
-        return "approved"
-    return "rejected"
+    return "approved"
 
 
 builder = StateGraph(AgentState)

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from State_definition import AgentState
 from dotenv import load_dotenv
-from langchain_openrouter import ChatOpenRouter
+from langchain_ollama import ChatOllama
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -22,19 +22,19 @@ from pydantic import BaseModel, Field
 
 
 MODELS = {
-    "requirement": "openai/gpt-4o-mini",    #working 
-    "code": "google/gemma-2-9b-it",  # working 
-    "design": "anthropic/claude-haiku-4.5",  #working
-    "review": "meta-llama/llama-3.3-70b-instruct",  #working
-    "test": "openai/gpt-4o-mini",  #working
-    "documentation": "openai/gpt-4o-mini"
+    "requirement": "llama3.2",
+    "code": "llama3.2",
+    "design": "llama3.2",
+    "review": "llama3.2",
+    "test": "llama3.2",
+    "documentation": "llama3.2"
 }
 
-def get_llm(agent_type: str = "requirement", max_tokens: int = 2000) -> ChatOpenRouter:
+def get_llm(agent_type: str = "requirement", max_tokens: int = 2000):
     """Centralized LLM initialization."""
-    return ChatOpenRouter(
-        model=MODELS.get(agent_type, "openai/gpt-4o-mini"),
-        max_tokens=max_tokens
+    return ChatOllama(
+        model=MODELS.get(agent_type, "llama3.2"),
+        temperature=0.2
     )
 
 

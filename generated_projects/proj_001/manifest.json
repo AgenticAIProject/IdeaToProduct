@@ -1,12 +1,7 @@
 {
   "project_id": "proj_001",
-  "generated_at": "2026-09-28T11:56:14.951320",
+  "generated_at": "2026-09-29T19:58:54.098725",
   "files": [
-    "requirements.txt",
-    "models.py",
-    "schemas.py",
-    "main.py",
-    "test_main.py",
-    "README.md"
+    "requirements.txt"
   ]
 }

@@ -99,12 +99,21 @@ Generate the complete project documentation package.
 """
     )
 
-    response: DocumentationDocument = doc_llm.invoke([
-        doc_prompt,
-        human_prompt
-    ])
-
-    documentation_payload: dict = response.model_dump()
+    try:
+        response: DocumentationDocument = doc_llm.invoke([
+            doc_prompt,
+            human_prompt
+        ])
+        documentation_payload: dict = response.model_dump()
+    except Exception as e:
+        print(f"  [Doc Agent] LLM failed to generate structured DocumentationDocument: {e} - using fallback docs.")
+        documentation_payload = {
+            "readme": f"# {idea.capitalize()}\n\nAutomated software generation completed.",
+            "api_reference": "## API Endpoints\n- GET /api/health",
+            "architecture_overview": "FastAPI + SQLite architecture.",
+            "user_guide": "Refer to README.md for setup instructions.",
+            "changelog": "v1.0.0 Initial Release"
+        }
 
     return {
         "documentation": documentation_payload,

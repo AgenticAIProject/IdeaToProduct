@@ -37,7 +37,10 @@ def run_code_tests(files: Union[List[Dict], Dict], test_files: Dict[str, str], t
                 out_f.write(content)
 
         # 3. Check if Docker is available on host
-        has_docker = subprocess.run(["docker", "--version"], capture_output=True).returncode == 0
+        try:
+            has_docker = subprocess.run(["docker", "--version"], capture_output=True).returncode == 0
+        except FileNotFoundError:
+            has_docker = False
         
         # 4. Construct the test execution command
         run_cmd = ""
