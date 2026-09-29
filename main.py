@@ -15,12 +15,11 @@ def main():
     initial_state: AgentState = {
         "project_id": "proj_001",
         "user_id": "user_001",
-        "idea": "Build a minimalist habit tracker app where users can check off daily goals.",
+        "idea": "Build a frontend to show health records.",
         
         "clarification_questions": [],
         "user_answers": [],
         "clarification_round": 0,
-        
         "requirements": {},
         "requirements_version": 0,
         
@@ -59,7 +58,7 @@ def main():
     # Configure the thread memory and recursion limit
     config = {
         "configurable": {"thread_id": "project_001_session"},
-        "recursion_limit": 15
+        "recursion_limit": 30
     }
 
     # --- First invocation ---
@@ -73,15 +72,21 @@ def main():
         questions = result.get("clarification_questions", [])
 
         print("\n" + "="*50)
-        print("CLARIFICATION NEEDED")
+        print("CLARIFICATION NEEDED (Type 'skip' or press Enter to skip)")
         print("="*50)
-        print("The Requirement Agent needs a few more details:\n")
+        print("The Requirement Agent needs a few more details (or skip to use standard defaults):\n")
 
         collected_answers = []
+        user_skipped = False
+
         for i, question in enumerate(questions, 1):
             print(f"Q{i}: {question}")
-            answer = input("Your answer: ").strip()
-            collected_answers.append(f"Q: {question}\nA: {answer}")
+            answer = input("Your answer (or press Enter to skip): ").strip()
+            if not answer or answer.lower() == "skip":
+                collected_answers.append(f"Q: {question}\nA: Skip (use standard architectural defaults)")
+                user_skipped = True
+            else:
+                collected_answers.append(f"Q: {question}\nA: {answer}")
             print()
 
         # Merge new answers into the existing ones and resume
@@ -92,7 +97,10 @@ def main():
             "workflow_status": "running",
         }
 
-        print("\nResuming workflow with your answers...\n")
+        if user_skipped:
+            print("\nSkipping further clarification. Resuming workflow with standard defaults...\n")
+        else:
+            print("\nResuming workflow with your answers...\n")
         result = graph.invoke(resume_input, config=config)
 
     print("\n\n" + "="*50)

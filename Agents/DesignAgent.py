@@ -84,33 +84,96 @@ class DesignDocument(BaseModel):
     )
 
 
-def Design_Agent(state: AgentState) -> AgentState:
-    print("\nDesign Agent received requirements")
+def generate_design_fallback(requirements: dict) -> DesignDocument:
+    """Deterministic fallback for DesignDocument when LLM fails or is unreachable."""
+    problem = requirements.get("problem_statement", "Application")
+    problem_lower = problem.lower()
 
-    requirements = state["requirements"]
+    # Determine system type
+    if any(k in problem_lower for k in ["frontend", "ui", "dashboard", "visualize", "interface", "web app"]):
+        system_type = "Frontend Web Application"
+        tech_choices = [
+            TechnologyChoice(category="frontend", technology="HTML/CSS/JS", reason="Lightweight responsive client-side interface."),
+            TechnologyChoice(category="testing", technology="jest", reason="Standard frontend testing framework.")
+        ]
+        api_endpoints = []
+        data_entities = []
+    else:
+        system_type = "Backend REST API"
+        tech_choices = [
+            TechnologyChoice(category="backend", technology="FastAPI", reason="Modern high-performance async Python framework."),
+            TechnologyChoice(category="database", technology="SQLite", reason="Self-contained local relational database."),
+            TechnologyChoice(category="testing", technology="pytest", reason="Standard Python test framework.")
+        ]
+        api_endpoints = [
+            APIEndpoint(id="EP-01", method="POST", path="/api/items", description="Create a new item", requirement_ids=["FR-01"]),
+            APIEndpoint(id="EP-02", method="GET", path="/api/items", description="List all items", requirement_ids=["FR-01"]),
+            APIEndpoint(id="EP-03", method="GET", path="/api/items/{id}", description="Get item by ID", requirement_ids=["FR-01"])
+        ]
+        data_entities = [
+            DataEntity(id="ENT-01", name="Item", purpose="Primary data entity", attributes=["id", "title", "created_at"], relationships=[], requirement_ids=["FR-01"])
+        ]
 
-    llm = imports.get_llm(agent_type="design", max_tokens=4000)
+    components = [
+        DesignComponent(id="COMP-01", name="MainController", responsibility=f"Coordinates core functionality for {problem[:40]}.", requirement_ids=["FR-01"]),
+        DesignComponent(id="COMP-02", name="DataService", responsibility="Manages state and operations.", requirement_ids=["FR-01"])
+    ]
 
-    design_llm = llm.with_structured_output(
-        DesignDocument,
+    decisions = [
+        DesignDecision(id="DEC-01", decision="Layered Modular Architecture", reason="Clear separation of concerns.", requirement_ids=["FR-01"])
+    ]
+
+    edge_cases = [
+        EdgeCase(id="EC-01", description="Empty or invalid input handling.", requirement_ids=["FR-01"], component_ids=["COMP-01"])
+    ]
+
+    return DesignDocument(
+        system_type=system_type,
+        architecture="Layered modular architecture adhering directly to requirement specifications.",
+        components=components,
+        data_entities=data_entities,
+        api_endpoints=api_endpoints,
+        external_integrations=[],
+        technology_choices=tech_choices,
+        design_decisions=decisions,
+        edge_cases=edge_cases
     )
 
-    design_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))
-    response = design_llm.invoke([
-        design_prompt,
-        imports.HumanMessage(
-            content=f"""Here are the requirements produced by the Requirement Agent:
+
+def Design_Agent(state: AgentState) -> dict:
+    print("\nDesign Agent received requirements")
+
+    requirements = state.get("requirements", {})
+
+    response = None
+    try:
+        llm = imports.get_llm(agent_type="design", max_tokens=4000)
+        design_llm = llm.with_structured_output(DesignDocument)
+        design_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))
+        result = design_llm.invoke([
+            design_prompt,
+            imports.HumanMessage(
+                content=f"""Here are the requirements produced by the Requirement Agent:
 
 {requirements}
 """
-        )
-    ])
+            )
+        ])
+        if result and isinstance(result, DesignDocument):
+            response = result
+        else:
+            print("  [Design Agent] Structured response was empty or invalid — activating fallback.")
+            response = generate_design_fallback(requirements)
+    except Exception as e:
+        print(f"  [Design Agent] Design LLM invocation issue: {e}")
+        print("  [Design Agent] Activating design-driven fallback...")
+        response = generate_design_fallback(requirements)
 
     design = response.model_dump()
 
     return {
         "design": design,
-        "design_version": state["design_version"] + 1,
+        "design_version": state.get("design_version", 0) + 1,
         "current_stage": "design",
         "workflow_status": "running"
     }

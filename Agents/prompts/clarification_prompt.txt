@@ -80,7 +80,7 @@ Do not block requirement generation unnecessarily.
 QUESTION RULES
 --------------------------------------------------
 
-- Ask at most 2 questions per round.
+- Ask at most 1 questions per round.
 - Prefer questions about users, problem, goal, and core workflow.
 - Questions must be specific and easy for the user to answer.
 - Avoid combining multiple unrelated questions into one question.

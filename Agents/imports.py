@@ -14,19 +14,24 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
 )
+
 from langchain_core.tools import tool
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from pydantic import BaseModel, Field
 
+# "design": "anthropic/claude-haiku-4.5",  #working
+#     "review": "meta-llama/llama-3.3-70b-instruct",  #working
+#     "test": "openai/gpt-4o-mini",  #working
+
 
 MODELS = {
     "requirement": "openai/gpt-4o-mini",    #working 
     "code": "google/gemma-2-9b-it",  # working 
-    "design": "anthropic/claude-haiku-4.5",  #working
-    "review": "meta-llama/llama-3.3-70b-instruct",  #working
-    "test": "openai/gpt-4o-mini",  #working
+    "design": "openai/gpt-4o-mini",  # working
+    "review": "openai/gpt-4o-mini",  # working
+    "test": "openai/gpt-4o-mini",  # working
     "documentation": "openai/gpt-4o-mini"
 }
 

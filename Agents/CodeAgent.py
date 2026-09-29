@@ -2646,10 +2646,15 @@ CRITICAL IMPLEMENTATION RULES:
         "stack": stack,
     }
 
+    retry_count = dict(state.get("retry_count", {}))
+    if code_version > 1:
+        retry_count["code"] = retry_count.get("code", 0) + 1
+
     return {
         "code": code_artifact,
         "code_version": code_version,
         "generated_project_path": project_path,
         "current_stage": "code",
         "workflow_status": "running",
+        "retry_count": retry_count,
     }

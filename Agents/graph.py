@@ -45,6 +45,14 @@ def requirement_router(state: AgentState):
 def review_router(state: AgentState):
     if state.get("approval_status") == "approved":
         return "approved"
+
+    # Circuit breaker: if code has been retried 2 or more times, proceed to documentation to prevent infinite loop
+    retry_count = state.get("retry_count", {})
+    code_retries = retry_count.get("code", 0)
+    if code_retries >= 2:
+        print("  [Review Router] Max rework retries reached. Proceeding to Documentation...")
+        return "approved"
+
     return "rejected"
 
 

@@ -443,6 +443,21 @@ window.submitClarification = async function () {
   }
 };
 
+window.skipClarification = async function () {
+  $('clarifyOverlay').classList.add('hidden');
+  try {
+    const res = await fetch(`${API}/api/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: State.sessionId, answers: ["skip (proceed with standard architectural defaults)"] }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    startPolling();
+  } catch (err) {
+    showPipelineError(err.message);
+  }
+};
+
 /* ═════════════════════════════════════════════════
    7. PIPELINE STATUS HELPERS
 ═════════════════════════════════════════════════ */
@@ -968,8 +983,18 @@ function renderReviewView(review, approvalStatus) {
       </table>
     </div>` : ''}
 
+    ${(review.defects && review.defects.length) ? `<div class="sec">
+      <div class="sec-title">Blocking Defects to Fix</div>
+      ${review.defects.map(d => `
+        <div class="finding high">
+          <div class="finding-sev">BLOCKING DEFECT</div>
+          <div class="finding-title">${escHtml(d)}</div>
+        </div>
+      `).join('')}
+    </div>` : ''}
+
     ${findings.length ? `<div class="sec">
-      <div class="sec-title">Findings</div>
+      <div class="sec-title">Findings & Recommendations</div>
       ${findings.map(f => `
         <div class="finding ${f.severity || 'low'}">
           <div class="finding-sev">${escHtml(f.severity || 'low')} · ${escHtml(f.id || '')}</div>
@@ -982,6 +1007,7 @@ function renderReviewView(review, approvalStatus) {
     ${review.summary ? `<div class="sec">
       <div class="sec-title">Summary</div>
       <p style="font-size:14px;color:var(--text-dim);line-height:1.65">${escHtml(review.summary)}</p>
+      ${review.overall_score ? `<div style="margin-top:8px;font-size:12px;font-family:var(--font-mono);color:var(--accent-glow)">Overall Quality Rating: ${escHtml(String(review.overall_score))}/10</div>` : ''}
     </div>` : ''}
 
     <div class="review-actions">

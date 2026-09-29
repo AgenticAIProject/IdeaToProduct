@@ -258,7 +258,6 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
 
 def run_server(port=8000):
     server_address = ("0.0.0.0", port)
-    HTTPServer.allow_reuse_address = True
     httpd = HTTPServer(server_address, PipelineServerHandler)
     print(f"\n==================================================================")
     print(f"🚀 IdeaToProduct Unified Server running at: http://localhost:{port}")

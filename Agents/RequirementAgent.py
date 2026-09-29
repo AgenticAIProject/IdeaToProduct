@@ -98,7 +98,12 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
 
     MAX_CLARIFICATION_ROUNDS = 2
 
-    if state["clarification_round"] >= MAX_CLARIFICATION_ROUNDS:
+    # Check if user explicitly skipped clarification or exceeded max rounds
+    user_requested_skip = any(
+        "skip" in str(ans).lower() for ans in state.get("user_answers", [])
+    )
+
+    if state["clarification_round"] >= MAX_CLARIFICATION_ROUNDS or user_requested_skip:
         clarification_check = ClarificationResponse(
             needs_clarification=False,
             questions=[]
