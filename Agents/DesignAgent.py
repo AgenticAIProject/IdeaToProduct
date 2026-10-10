@@ -158,6 +158,70 @@ def generate_design_fallback(requirements: dict) -> DesignDocument:
     )
 
 
+# Frameworks the test sandbox cannot build/run (no npm install, no bundler, node:test only).
+UNBUILDABLE_FRONTENDS = ("react", "vue", "svelte", "angular", "next", "nuxt")
+
+
+def _tech(design: dict, category: str) -> str:
+    for c in design.get("technology_choices", []):
+        if str(c.get("category", "")).lower() == category:
+            return str(c.get("technology", "")).strip()
+    return ""
+
+
+def normalize_design(design: dict, requirements: dict) -> dict:
+    """
+    Deterministic consistency pass. Small LLMs often return contradictory designs
+    (frontend-only app with an API and a database, React in a sandbox that cannot build it).
+    Fix those contradictions instead of passing them downstream. Every change is recorded
+    as a design decision so nothing happens silently.
+    """
+    changes = []
+    choices = design.get("technology_choices", [])
+    backend = _tech(design, "backend").lower()
+    frontend = _tech(design, "frontend").lower()
+    req_text = str(requirements).lower()
+    no_backend = backend in ("", "none", "null", "n/a")
+
+    # 1. Framework the sandbox cannot execute, and the user never asked for it -> plain HTML/CSS/JS
+    if any(k in frontend for k in UNBUILDABLE_FRONTENDS) and not any(k in req_text for k in UNBUILDABLE_FRONTENDS):
+        for c in choices:
+            cat = str(c.get("category", "")).lower()
+            if cat == "frontend":
+                c["technology"] = "HTML/CSS/JS"
+                c["reason"] = "Plain HTML/CSS/JS runs and is testable without a build step."
+            if cat == "language":
+                c["technology"] = "JavaScript"
+            if cat == "testing":
+                c["technology"] = "node:test"
+                c["reason"] = "Built-in Node test runner; no dependencies required."
+        design["libraries_and_tools"] = []
+        changes.append("Frontend simplified to plain HTML/CSS/JS (no build step available; framework not required by the requirements).")
+        frontend = "html/css/js"
+
+    # 2. No backend => no API endpoints and no server-side database
+    if no_backend:
+        if design.get("api_endpoints"):
+            design["api_endpoints"] = []
+            changes.append("Removed API endpoints: the design has no backend; data is provided by in-app sample data.")
+        kept = [c for c in choices if str(c.get("category", "")).lower() != "database"]
+        if len(kept) != len(choices):
+            design["technology_choices"] = kept
+            changes.append("Removed database choice: a frontend-only app keeps data in memory/sample data.")
+        if "html" in frontend and design.get("libraries_and_tools"):
+            design["libraries_and_tools"] = []
+
+    if changes:
+        design.setdefault("design_decisions", []).extend(
+            {"id": f"DEC-N{i+1:02d}", "decision": text,
+             "reason": "Automatic consistency check of the design.", "requirement_ids": []}
+            for i, text in enumerate(changes)
+        )
+        for text in changes:
+            print(f"  [Design Agent] consistency fix: {text}")
+    return design
+
+
 def Design_Agent(state: AgentState) -> dict:
     print("\nDesign Agent received requirements")
 
@@ -187,7 +251,7 @@ def Design_Agent(state: AgentState) -> dict:
         print("  [Design Agent] Activating design-driven fallback...")
         response = generate_design_fallback(requirements)
 
-    design = response.model_dump()
+    design = normalize_design(response.model_dump(), requirements)
 
     return {
         "design": design,

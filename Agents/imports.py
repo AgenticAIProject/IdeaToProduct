@@ -26,13 +26,24 @@ from pydantic import BaseModel, Field
 #     "test": "openai/gpt-4o-mini",  #working
 
 
+# MODELS = {
+#     "requirement": "openai/gpt-4o-mini",    # working 
+#     "code": "openai/gpt-4o-mini",           # working 
+#     "design": "openai/gpt-4o-mini",         # working
+#     "review": "openai/gpt-4o-mini",         # working
+#     "test": "openai/gpt-4o-mini",           # working
+#     "documentation": "openai/gpt-4o-mini"
+# }
+
+
+
 MODELS = {
-    "requirement": "openai/gpt-4o-mini",    # working 
-    "code": "openai/gpt-4o-mini",           # working 
-    "design": "openai/gpt-4o-mini",         # working
-    "review": "openai/gpt-4o-mini",         # working
-    "test": "openai/gpt-4o-mini",           # working
-    "documentation": "openai/gpt-4o-mini"
+    "requirement":   "anthropic/claude-sonnet-5.5",      # short output, shapes every later stage
+    "design":        "anthropic/claude-sonnet-5.5",      # same reason
+    "code":          "deepseek/deepseek-v4-pro-0813",    # most tokens, so the cheap coder goes here
+    "test":          "z-ai/glm-5.3",                     # different model family from code
+    "review":        "openai/gpt-6.1-sol",               # third family; reads code, writes little
+    "documentation": "openai/gpt-6-luna",                # low risk, cheapest tier
 }
 
 def get_llm(agent_type: str = "requirement", max_tokens: int = 2000) -> ChatOpenRouter:

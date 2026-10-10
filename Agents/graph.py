@@ -42,16 +42,23 @@ def requirement_router(state: AgentState):
     return "design"
 
 
+def code_router(state: AgentState):
+    """If code generation itself failed (provider error, no plan), stop. Testing nothing wastes calls."""
+    if state.get("workflow_status") == "failed" or not (state.get("code") or {}).get("files"):
+        return "failed"
+    return "test"
+
+
 def review_router(state: AgentState):
     if state.get("approval_status") == "approved":
         return "approved"
 
-    # Circuit breaker: if code has been retried 3 or more times, proceed to documentation
+    # Circuit breaker: after 3 rework rounds stop. Do NOT document code that never passed review.
     retry_count = state.get("retry_count", {})
     code_retries = retry_count.get("code", 0)
     if code_retries >= 3:
-        print("  [Review Router] Max rework retries (3) reached. Proceeding to Documentation...")
-        return "approved"
+        print("  [Review Router] Max rework retries (3) reached without approval. Stopping.")
+        return "give_up"
 
     return "rejected"
 
@@ -78,7 +85,11 @@ builder.add_conditional_edges(
 
 # Flow from design -> code -> test -> review
 builder.add_edge("design", "code")
-builder.add_edge("code", "test")
+builder.add_conditional_edges(
+    "code",
+    code_router,
+    {"failed": END, "test": "test"}
+)
 builder.add_edge("test", "review")
 
 # Review routes to documentation if approved, loops back to code if rejected
@@ -87,7 +98,8 @@ builder.add_conditional_edges(
     review_router,
     {
         "approved": "documentation",
-        "rejected": "code"
+        "rejected": "code",
+        "give_up": END
     }
 )
 

@@ -335,8 +335,9 @@ def Code_Agent(state: AgentState) -> dict:
     prev_files = {f["path"]: f["content"] for f in previous.get("files", []) if isinstance(f, dict)}
     is_rework = bool(prev_files) and code_version > 1
 
-    llm = imports.get_llm(agent_type="code", max_tokens=4000)
-    plan_llm = imports.get_llm(agent_type="code", max_tokens=2500)
+    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "3000"))   # OpenRouter reserves credit for max_tokens
+    llm = imports.get_llm(agent_type="code", max_tokens=file_tokens)
+    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000)
 
     written: dict[str, str] = {}
     meta: dict[str, FilePlan] = {}
@@ -393,6 +394,9 @@ def Code_Agent(state: AgentState) -> dict:
     except Exception as e:  # noqa: BLE001
         # No template fallback: surface the real failure.
         print(f"  [Code Agent] Generation failed: {e}")
+        if any(k in str(e).lower() for k in ("credit", "402", "401", "api key", "quota", "rate limit")):
+            print("  [Code Agent] This is an account/provider problem (credits, key or rate limit), not a code problem. "
+                  "Check openrouter.ai/credits, then re-run.")
         return {
             "code": {"files": [], "generation_error": str(e)},
             "code_version": code_version,

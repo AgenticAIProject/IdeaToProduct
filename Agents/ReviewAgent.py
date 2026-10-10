@@ -31,7 +31,7 @@ def generate_review_fallback(state: imports.AgentState) -> ReviewResult:
     test_results = state.get("test_results", {})
     failed_tests = test_results.get("failed_tests", 0)
     errors = test_results.get("errors", [])
-    has_test_failures = failed_tests > 0 or bool(errors)
+    has_test_failures = failed_tests > 0 or (bool(errors) and bool(state.get('code', {}).get('files')))
 
     code = state.get("code", {})
     files = code.get("files", [])

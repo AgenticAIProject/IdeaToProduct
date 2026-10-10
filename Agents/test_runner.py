@@ -32,9 +32,9 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
-# ---------------------------------------------------------------------------
+# ------------s---------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 DOCKER_IMAGE       = "python:3.11-slim"
@@ -417,7 +417,7 @@ def _parse_stdout_fallback(stdout: str) -> tuple[int, int, int]:
 def run_code_tests(
     files:          Union[List[Dict], Dict],
     test_files:     Dict[str, str],
-    test_command:   str  = None,
+    test_command:   Optional[str] = None,
     timeout_seconds: int = 30,
 ) -> dict:
     """

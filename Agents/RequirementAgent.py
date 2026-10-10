@@ -129,7 +129,7 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
 
     if clarification_check.needs_clarification:
         return {
-            "clarification_questions": clarification_check.questions,
+            "clarification_questions": clarification_check.questions[:1],  # prompt says 1/round; small models ignore it
             "clarification_round":     state["clarification_round"] + 1,
             "current_stage":           "clarification",
             "workflow_status":         "waiting_for_user"

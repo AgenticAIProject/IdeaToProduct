@@ -24,12 +24,14 @@ def main():
         "clarification_round": 0,
         "requirements": {},
         "requirements_version": 0,
+        "github_evidence": [],
         
         "design": {},
         "design_version": 0,
         
         "code": {},
         "code_version": 0,
+        "generated_project_path": "",
         
         "test_results": {},
         "test_version": 0,
