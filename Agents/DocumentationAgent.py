@@ -68,11 +68,6 @@ def Documentation_Agent(state: AgentState) -> dict:
 
     llm = imports.get_llm(agent_type="documentation", max_tokens=2000)
 
-    doc_llm = llm.with_structured_output(
-        DocumentationDocument,
-        
-    )
-
     doc_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/documentation_prompt.txt"))
 
     human_prompt = imports.HumanMessage(
@@ -99,7 +94,7 @@ Generate the complete project documentation package.
 """
     )
 
-    response: DocumentationDocument = doc_llm.invoke([
+    response = imports.invoke_structured(llm, DocumentationDocument, [
         doc_prompt,
         human_prompt
     ])

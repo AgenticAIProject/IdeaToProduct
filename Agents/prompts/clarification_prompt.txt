@@ -18,6 +18,7 @@ assumptions and open questions.
 
 QUESTION RULES
 - At most 1 question per round.
+- Give user 4 relevent options out of which user will chose as answer
 - Prefer users, problem, goal, core workflow. Specific and easy to answer. One topic only.
 - Use previous answers; never repeat an answered question.
 

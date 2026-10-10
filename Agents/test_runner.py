@@ -32,9 +32,9 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Union
 
-# ------------s---------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 DOCKER_IMAGE       = "python:3.11-slim"
@@ -339,7 +339,11 @@ def _parse_junit(xml_path: str) -> tuple[int, int, int, list[str]]:
 
     try:
         root  = ET.parse(xml_path).getroot()
-        suite = root if root.tag == "testsuite" else (root.find("testsuite") or root)
+        if root.tag == "testsuite":
+            suite = root
+        else:
+            found = root.find("testsuite")
+            suite = found if found is not None else root
 
         total    = int(suite.get("tests",    0))
         errors   = int(suite.get("errors",   0))
@@ -417,7 +421,7 @@ def _parse_stdout_fallback(stdout: str) -> tuple[int, int, int]:
 def run_code_tests(
     files:          Union[List[Dict], Dict],
     test_files:     Dict[str, str],
-    test_command:   Optional[str] = None,
+    test_command:   str | None = None,
     timeout_seconds: int = 30,
 ) -> dict:
     """

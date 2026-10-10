@@ -63,7 +63,7 @@ def review_router(state: AgentState):
     return "rejected"
 
 
-builder = StateGraph(AgentState)
+builder = StateGraph(AgentState)  # pyrefly: ignore[bad-specialization]
 
 builder.add_node("requirement", requirement_node)
 builder.add_node("design", design_node)

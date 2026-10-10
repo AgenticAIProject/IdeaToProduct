@@ -11,7 +11,7 @@ import os
 import json
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import shutil
 
 from langchain_core.tools import tool
@@ -60,7 +60,7 @@ def repo_scaffold(project_id: str, files: list[dict]) -> dict:
     # Write a manifest
     manifest = {
         "project_id":   project_id,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "files":        written,
     }
     (project_dir / "manifest.json").write_text(

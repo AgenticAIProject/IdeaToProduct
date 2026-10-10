@@ -67,7 +67,8 @@ class ClarificationResponse(BaseModel):
     questions: list[str] = Field(default_factory=list)
 
 
-def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
+def Requirement_Agent(state: imports.AgentState) -> dict:
+    # Returns a PARTIAL state update (LangGraph merges it), so the return type is dict, not AgentState.
 
     idea = state["idea"]
 
@@ -115,11 +116,8 @@ def Requirement_Agent(state: imports.AgentState) -> imports.AgentState:
 
         clarification_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/clarification_prompt.txt"))
         
-        clarification_llm = llm.with_structured_output(
-            ClarificationResponse
-        )
-        
-        clarification_check = clarification_llm.invoke(
+        clarification_check = imports.invoke_structured(
+            llm, ClarificationResponse,
             [clarification_prompt, imports.HumanMessage(content=user_input)]
         )
 
@@ -161,11 +159,7 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     requirement_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/requirement_prompt.txt"))
     requirement_skill = imports.SystemMessage(content=imports.load_prompt("skills/requirement_skill.txt"))
 
-    requirement_llm = llm.with_structured_output(
-        RequirementsList
-    )
-
-    response = requirement_llm.invoke([
+    response = imports.invoke_structured(llm, RequirementsList, [
         requirement_prompt, 
         requirement_skill, 
         grounding_prompt, 

@@ -259,7 +259,7 @@ CRITICAL TESTING INSTRUCTIONS:
     else:
         # 3b. Small structured call for the plan
         try:
-            plan = llm.with_structured_output(TestPlan).invoke([
+            plan = imports.invoke_structured(llm, TestPlan, [
                 system_prompt,
                 imports.HumanMessage(content=base_context + f"\nProduce ONLY the test plan and test case list. Test file name: {default_name}"),
             ])
@@ -267,7 +267,6 @@ CRITICAL TESTING INSTRUCTIONS:
             test_name = default_name   # runner command is built around this name
         except Exception as e:  # noqa: BLE001
             print(f"  [Test Agent] Plan generation failed ({e}); continuing without a plan.")
-            plan = None
 
         # 3c. Test code as plain text (no JSON wrapping => no truncation / escape problems)
         test_content = _complete_text(llm, [

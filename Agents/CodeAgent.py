@@ -250,11 +250,10 @@ List every file needed to run this project (including the dependency manifest, e
 or package.json). Keep it minimal: no files the design does not need. Do NOT list test files.
 For each file give the exact public names (`exports`) other files will rely on.
 Set test_command for the project's language (python: 'pytest --tb=short -v').""")
-    plan_llm = llm.with_structured_output(CodePlan)
     last_err = None
     for _ in range(2):
         try:
-            plan = plan_llm.invoke([system, human])
+            plan = imports.invoke_structured(llm, CodePlan, [system, human])
             if plan and plan.files:
                 return plan
         except Exception as e:  # noqa: BLE001
@@ -365,7 +364,7 @@ def Code_Agent(state: AgentState) -> dict:
 
             selection = None
             try:
-                selection = plan_llm.with_structured_output(FixSelection).invoke([
+                selection = imports.invoke_structured(plan_llm, FixSelection, [
                     imports.SystemMessage(content="Decide which files must change to fix the problems. "
                                                   "Prefer the smallest set. Do not include test files."),
                     imports.HumanMessage(content=f"Files: {list(prev_files)}\n\n{feedback}"),

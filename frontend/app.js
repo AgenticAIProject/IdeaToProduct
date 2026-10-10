@@ -181,7 +181,7 @@ window.launchPipeline = async function () {
 
   } catch (err) {
     if (btn) btn.disabled = false;
-    if (label) label.textContent = 'Launch Pipeline';
+    if (label) label.textContent = 'Start project';
     alert('Could not connect to pipeline: ' + err.message);
   }
 };
@@ -232,7 +232,7 @@ window.exitStudio = function () {
   const btn = $('launchBtn');
   const label = $('launchBtnLabel');
   if (btn) btn.disabled = false;
-  if (label) label.textContent = 'Launch Pipeline';
+  if (label) label.textContent = 'Start project';
 };
 
 /* ═════════════════════════════════════════════════
@@ -1198,6 +1198,7 @@ document.head.appendChild(_s);
 /* fx.js — additive layer over app.js. Reads State (from app.js) and observes fetch responses; never changes API calls. */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
   const AG = [['requirement', 'requirements.agent'], ['design', 'design.agent'], ['code', 'code.agent'], ['test', 'test.agent'], ['review', 'review.agent'], ['documentation', 'documentation.agent']];
   // Narration shown while a stage runs. Illustrative text — the backend does not stream logs yet.
@@ -1295,6 +1296,7 @@ document.head.appendChild(_s);
 /* ===== part 2: story sections, agent detail panel, artifact shelf, quality gate ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const host = document.getElementById('how-it-works'); if (!host) return;
   const RM = matchMedia('(prefers-reduced-motion:reduce)').matches, D = window.MockData || {};
   const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -1400,6 +1402,7 @@ document.head.appendChild(_s);
 /* ===== part 3: window canvas hero, question chips (auto-decide), tilt / magnetic / counters ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
   const land = document.getElementById('screenLanding'); if (!land) return;
   const sleep = ms => new Promise(r => setTimeout(r, RM ? 40 : ms));
@@ -1499,6 +1502,7 @@ document.head.appendChild(_s);
 /* ===== part 5: hero is one clean full screen; idea input + running code live in a sandbox screen below ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const land = document.getElementById('screenLanding'), card = document.getElementById('ideaCard'); if (!land || !card) return;
   const sb = document.createElement('section'); sb.id = 'sandbox'; sb.className = 'sb';
   sb.innerHTML = '<p class="sb-cap">sandbox · describe an idea, watch the agents work</p><div class="sb-canvas" id="sbCanvas"></div>';
@@ -1528,6 +1532,7 @@ document.head.appendChild(_s);
 /* ===== part 8: typewriter headline (text is exactly: "Turn your / idea into / a product.") ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const h = document.querySelector('.landing-heading'); if (!h) return;
   const lines = [...h.querySelectorAll('.lh-line')]; if (!lines.length) return;
   h.setAttribute('aria-label', lines.map(l => l.textContent.trim()).join(' '));   // screen readers get the full sentence at once
@@ -1558,6 +1563,7 @@ document.head.appendChild(_s);
 /* ===== part 9: floating artifacts around the hero (decorative; parallax + occasional glow) ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const land = document.getElementById('screenLanding'); if (!land) return;
   const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
   const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -1587,6 +1593,7 @@ document.head.appendChild(_s);
 /* ===== part 10: palette picker (accent + glow lights), saved in localStorage ===== */
 (() => {
   'use strict';
+  if (document.documentElement.dataset.theme === 'formal') return;
   const root = document.documentElement;
   // [name, dark-mode colour, light-mode colour] — hues follow the code-editor palette idea
   const P = [['code-green', '#2fd18f', '#0f9d6b'], ['code-blue', '#5a82e8', '#3557c9'], ['code-red', '#e0606e', '#c23b4a'], ['code-yellow', '#dcb85f', '#a67a12'], ['code-purple', '#8461e4', '#6a44d0'], ['code-aqua', '#9ed3f7', '#2b86c5']];
