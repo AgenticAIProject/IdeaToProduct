@@ -1,0 +1,19 @@
+## CODE
+Static frontend (HTML/CSS/JS), no build step, works by opening index.html.
+- Files: `index.html`, `style.css`, `logic.js`, `app.js`, plus a minimal `package.json`
+  (`{"name": "...", "version": "1.0.0", "scripts": {"test": "node --test"}}`).
+- `logic.js` holds ALL pure logic (validation, filtering, calculations, sorting) and NO DOM access.
+  It ends with:
+  `if (typeof module !== 'undefined' && module.exports) { module.exports = { fnA, fnB }; }`
+  Declare functions at top level (no import/export statements), so a browser <script> sees them and Node can require them.
+- `app.js` does DOM work only and calls the functions from logic.js. In index.html load logic.js BEFORE app.js.
+- No CDN, no frameworks, no network calls. Use embedded realistic sample data and in-memory state.
+- Give every interactive element a stable id named in the plan's exports (form, inputs, list/table, error area).
+- Handle empty state and validation errors visibly.
+
+## TEST
+- CommonJS only: `const test = require('node:test'); const assert = require('node:assert'); const fs = require('node:fs');`
+- `const logic = require('./logic.js');` and test the exported pure functions with exact expected values
+  (valid, boundary, invalid inputs).
+- Read `index.html` with fs and assert that the elements/ids/script tags required by the acceptance criteria exist.
+- Do not try to run app.js or simulate the DOM.

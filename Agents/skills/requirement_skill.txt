@@ -1,14 +1,15 @@
-Requirements Engineering Methodology:
+Requirements Engineering Method (use as a checklist; do not repeat it in the output):
 
-1. Identify stakeholders and actors.
-2. Define the problem clearly.
-3. Identify measurable objectives.
-4. Generate user stories.
-5. Convert user needs into functional requirements.
-6. Identify non-functional requirements.
-7. Define acceptance criteria.
-8. Identify constraints and assumptions.
-9. Define project scope.
-10. Identify open questions.
-11. Validate requirements for clarity,
-    consistency, feasibility and testability.
+1. Name the actors and the single core problem. If there are more than 3 actors, merge or defer the rest.
+2. Write 2-4 measurable objectives for V1.
+3. For each core workflow step write one user story, then one or more "The system shall ..." requirements.
+4. For each requirement write acceptance criteria with concrete data and exact outcomes:
+   - happy path (a realistic example value),
+   - each validation rule with a boundary value (empty, 0, negative, too long),
+   - not-found and duplicate cases where they apply.
+5. Add non-functional requirements only where the idea implies them (e.g. security for money or personal data).
+6. Use the developer-issue grounding to add acceptance criteria for known edge cases of this domain
+   (e.g. overlapping bookings, negative amounts, duplicate submissions). Do not add features.
+7. Record every guess as an assumption; record scope-changing unknowns as open questions.
+8. Cut V1 to 3-8 Must requirements. Everything else is Should/Could or out of scope.
+9. Final check: every requirement has an acceptance criterion; no requirement names a technology.

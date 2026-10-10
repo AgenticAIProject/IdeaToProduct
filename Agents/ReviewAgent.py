@@ -101,8 +101,12 @@ def Review_Agent(state: imports.AgentState) -> dict:
     # Format review input context
     code_artifact = state.get("code", {})
     code_files = code_artifact.get("files", [])
-    files_summary = [f"- {f.get('path')}: {f.get('description', '')}" for f in code_files]
-    files_str = "\n".join(files_summary) if files_summary else "No files generated."
+    files_summary = [
+        f"--- {f.get('path')}: {f.get('description', '')} ---\n{(f.get('content') or '')[:5000]}"
+        for f in code_files if isinstance(f, dict)
+    ]
+    files_str = "\n\n".join(files_summary) if files_summary else "No files generated."
+    code_notes = code_artifact.get("implementation_notes", [])
 
     user_input = f"""=== PROJECT IDEA ===
 {state.get('idea', '')}
@@ -116,13 +120,16 @@ def Review_Agent(state: imports.AgentState) -> dict:
 === GENERATED SOURCE CODE FILES ===
 {files_str}
 
+=== CODE AGENT NOTES (validation problems, decisions) ===
+{code_notes}
+
 === AUTOMATED TEST RESULTS ===
 {state.get('test_results', {})}
 """
 
     response: Optional[ReviewResult] = None
     try:
-        llm = imports.get_llm(agent_type="review", max_tokens=2000)
+        llm = imports.get_llm(agent_type="review", max_tokens=3000)
         review_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/review_prompt.txt"))
         review_skill = imports.SystemMessage(content=imports.load_prompt("skills/review_skill.txt"))
 

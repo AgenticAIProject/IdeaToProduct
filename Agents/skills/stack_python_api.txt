@@ -1,0 +1,25 @@
+## CODE
+Python web API (FastAPI preferred; Flask only if the design says so).
+- Flat layout in the project root. `app.py` defines `app = FastAPI()` and the routes. Models in `models.py`
+  (Pydantic v2), storage in `store.py` or `database.py`. Tests will do `from app import app`.
+- Validation lives in the Pydantic models (Field constraints). Invalid input then returns 422 automatically.
+  Use `raise HTTPException(status_code=404, detail="...")` for not found. Set `status_code=` on each route
+  to the design's success_status.
+- Storage: stdlib `sqlite3` (no ORM) unless the design says otherwise. Read the path on every connection:
+  `os.environ.get("APP_DB_PATH", "app.db")`, and run `CREATE TABLE IF NOT EXISTS` when connecting,
+  so a test that points APP_DB_PATH at a temp file works with no extra setup.
+  If the design has no persistence, keep an in-memory dict and export `reset_state()` to clear it.
+- requirements.txt: every third-party import (fastapi, uvicorn, pydantic ...). NEVER list stdlib modules
+  (sqlite3, json, os ...). Do not pin exact versions.
+- Add `if __name__ == "__main__": import uvicorn; uvicorn.run(app, host="127.0.0.1", port=8000)`.
+- run_command: `uvicorn app:app --reload`   test_command: `pytest --tb=short -v`
+- Flask variant: `create_app()` factory plus module-level `app = create_app()`.
+
+## TEST
+- `from fastapi.testclient import TestClient` and `from app import app`. (httpx is installed by the runner.)
+- A fixture sets the database path before each test, e.g.
+  `monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "t.db"))`, and calls `reset_state()` if the code exports it.
+  Create `TestClient(app)` inside the fixture.
+- Assert the exact success_status from the design; for invalid input use 400 <= status < 500 unless the design
+  gives the exact code.
+- Check response bodies against the design's response_fields, using the field names exactly.

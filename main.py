@@ -1,11 +1,13 @@
 import sys
 from pathlib import Path
 
-# Add Agents to the Python path
-sys.path.append(str(Path(__file__).parent / "Agents"))
+# Add Agents to the Python path so bare imports work
+agents_dir = str(Path(__file__).resolve().parent / "Agents")
+if agents_dir not in sys.path:
+    sys.path.insert(0, agents_dir)
 
-from Agents.State_definition import AgentState
-from Agents.graph import graph
+from State_definition import AgentState
+from graph import graph
 from pprint import pprint
 
 def main():

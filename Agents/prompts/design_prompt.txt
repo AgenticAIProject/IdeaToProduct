@@ -104,12 +104,18 @@ APIs may be required when the system needs communication between:
 - Services
 - Other clients
 
-If APIs are required, define:
+If APIs are required, define a COMPLETE CONTRACT for each endpoint, because the Code Agent and the
+Test Agent work independently and must agree on it:
 
 - Unique ID
 - HTTP method
 - Path
 - Purpose
+- request_fields: names and types of the body/query/path inputs, with validation rules
+  (e.g. "title: string, 1-100 chars", "amount: integer cents, > 0")
+- response_fields: names and types of the success response body
+- success_status: the exact HTTP status for success (200, 201, 204 ...)
+- error_cases: each failure as "condition -> status" (e.g. "unknown id -> 404", "amount <= 0 -> 422")
 - Related requirement IDs
 
 If APIs are not required, return an empty API list.
@@ -129,7 +135,9 @@ Maintain a clear distinction between Core Architecture and Auxiliary Dependencie
    - 'frontend': Primary UI framework (e.g., HTML/CSS/JS, React, Vue, or None for CLI/Backend)
    - 'backend': Primary application/server framework (e.g., FastAPI, Gin, Spring Boot, Flask, Express, Python CLI)
    - 'database': Persistence engine (e.g., PostgreSQL, MongoDB, SQLite, MySQL, Redis, or None)
-   - 'testing': Test framework (e.g., pytest, go test, JUnit, Jest)
+   - 'testing': Test framework (e.g., pytest, go test, JUnit, node:test)
+     (the test environment only has the language's built-in/standard runner plus pytest for Python
+      and node:test for JavaScript; prefer those)
 
 2. AUXILIARY LIBRARIES & TOOLS (libraries_and_tools):
    List helper packages, HTTP clients, ORMs, styling toolkits, and utilities here
@@ -155,17 +163,19 @@ identify it as a Design-stage decision.
 Do not present Design-stage decisions as user requirements.
 
 ==================================================
-7. EDGE CASES
+8. EDGE CASES
 ==================================================
 
 Identify important failure cases, boundary conditions, and unusual
 situations that implementation and testing should handle.
+Write each edge case as a concrete input and the expected behavior
+(e.g. "empty title -> rejected with a validation error"), not as a topic ("input validation").
 
 Where possible, associate each edge case with the relevant
 requirement or design component.
 
 ==================================================
-8. REQUIREMENT TRACEABILITY
+9. REQUIREMENT TRACEABILITY
 ==================================================
 
 Maintain traceability between requirements and design.
@@ -184,7 +194,7 @@ either:
 2. do not include it.
 
 ==================================================
-9. DESIGN BOUNDARY
+10. DESIGN BOUNDARY
 ==================================================
 
 You MUST NOT:
@@ -202,10 +212,13 @@ provided that they support existing requirements and are explicitly
 recorded as Design-stage decisions.
 
 ==================================================
-10. VERSION PRINCIPLE
+11. VERSION PRINCIPLE
 ==================================================
 
 Prefer the simplest design that can satisfy the approved requirements.
+Prefer designs that fit in roughly 3 to 8 source files. Prefer SQLite or in-memory storage over
+external services; prefer Python (FastAPI) for APIs and plain HTML/CSS/JS for UIs unless the
+requirements demand otherwise.
 
 Avoid:
 
@@ -217,7 +230,7 @@ Avoid:
 - Features outside the approved scope
 
 ==================================================
-11. OUTPUT
+12. OUTPUT
 ==================================================
 
 Return only the structured design document.

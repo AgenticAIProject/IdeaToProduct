@@ -1,7 +1,19 @@
-Review Methodology:
+Review Methodology (apply in this order, stop adding items once you have the top 5 defects):
 
-1. Consistency Check: Ensure requirements match design and code implementations.
-2. Completeness Check: Ensure no missing features or unhandled edge cases.
-3. Quality Check: Look for best practices, maintainability, and clean architecture.
-4. Defect Identification: Highlight any test failures, potential bugs, or performance issues.
-5. Final Verdict: If defects are critical, reject the build. Otherwise, approve.
+1. EVIDENCE FIRST
+   Start from the test result. If tests failed, read the failure output and name the file and behavior that
+   caused it. Decide: code defect, dependency/manifest defect, or test-infrastructure problem
+   ([TEST-INFRA], [DEPENDENCY], timeout). Only code and manifest defects go to `defects`.
+2. REQUIREMENT COVERAGE
+   For each Must requirement and its acceptance criteria, find the code that implements it.
+   Missing or clearly wrong = defect. Partial but working = feedback.
+3. CONTRACT CHECK
+   Compare the design's endpoints/fields/status codes (or functions/exports) with the code.
+   A mismatch with the design is a defect (cite the design id).
+4. RUNNABILITY
+   Syntax/import errors, imports of modules not generated or not in the manifest, missing entrypoint.
+5. SECURITY BASICS
+   Hardcoded secrets, string-built SQL, unvalidated input, unrestricted file upload.
+6. VERDICT
+   Reject only for real defects from steps 1-5. Style, naming, extra tests, docs polish -> feedback.
+   Every defect: "<file>: <what is wrong>; expected <what> (<AC/FR/design id>)".

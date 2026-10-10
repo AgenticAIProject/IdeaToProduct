@@ -1,0 +1,12 @@
+## CODE
+Python command-line tool or data-processing script.
+- `core.py`: pure, importable functions that do the work. `main.py`: `def main(argv=None) -> int` using argparse,
+  ending with `if __name__ == "__main__": raise SystemExit(main())`.
+- No work or input() prompts at import time. Take file paths from arguments or environment variables.
+- Errors: message to stderr and a non-zero return code. Normal output via print.
+- requirements.txt only if a third-party package is imported; never list stdlib modules.
+- run_command: `python main.py --help`   test_command: `pytest --tb=short -v`
+
+## TEST
+- Import functions from `core` and call `main([...])` directly with `capsys`; use `tmp_path` for files.
+- Do not use subprocess or the network.

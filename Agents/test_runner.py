@@ -8,7 +8,7 @@ Security guarantees
 - AI-generated code is NEVER executed directly on the host.
 - If Docker is unavailable, execution is refused and a structured failure is returned.
 - Docker container runs with:
-    --network none          (no outbound/inbound network)
+    --network none          (test phase for Python; install phase needs network)
     --memory 512m           (RAM cap)
     --cpus 1.0              (CPU cap)
     --cap-drop ALL          (drop all Linux capabilities)
@@ -38,7 +38,8 @@ from typing import Dict, List, Union
 # Constants
 # ---------------------------------------------------------------------------
 DOCKER_IMAGE       = "python:3.11-slim"
-DOCKER_TIMEOUT_CAP = 120           # hard upper bound regardless of caller value
+DOCKER_TIMEOUT_CAP = 300           # hard upper bound for the TEST phase
+INSTALL_TIMEOUT    = 240           # separate budget for pip install (has network)
 JUNIT_CONTAINER    = "/app/test-results.xml"
 JUNIT_HOST_NAME    = "test-results.xml"
 
@@ -273,23 +274,53 @@ def _build_run_cmd(
     return " && ".join(parts)
 
 
-def _build_docker_cmd(temp_dir: str, run_cmd: str, docker_image: str = DOCKER_IMAGE) -> list[str]:
+def _build_docker_cmd(temp_dir: str, run_cmd: str, docker_image: str = DOCKER_IMAGE, network: bool = True) -> list[str]:
     """
-    Return the hardened `docker run` command with appropriate runtime container.
+    Return the hardened `docker run` command.
+
+    Runs as the host user (when available) so files in the bind mount stay readable/removable
+    (with --cap-drop ALL, root inside the container cannot read a 0700 host temp dir).
     """
     shell = "sh" if "alpine" in docker_image else "bash"
-    return [
-        "docker", "run",
-        "--rm",
-        "--memory",       "512m",
-        "--cpus",         "1.0",
-        "--cap-drop",     "ALL",
+    cmd = [
+        "docker", "run", "--rm",
+        "--memory", "512m",
+        "--cpus", "1.0",
+        "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
+    ]
+    if not network:
+        cmd += ["--network", "none"]
+    if hasattr(os, "getuid"):
+        cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+    cmd += [
+        "-e", "HOME=/tmp",
+        "-e", "GOCACHE=/tmp/.gocache",
+        "-e", "npm_config_cache=/tmp/.npm",
+        "-e", "PIP_DISABLE_PIP_VERSION_CHECK=1",
         "-v", f"{temp_dir}:/app",
         "-w", "/app",
         docker_image,
         shell, "-c", run_cmd,
     ]
+    return cmd
+
+
+def _python_test_cmd(test_command: str | None) -> str:
+    """
+    Normalise any pytest-ish command to: python -m pytest <args> --junitxml=...
+    - `python -m` puts the project root on sys.path (so `import app` works)
+    - --junitxml gives exact counts instead of fragile stdout scraping
+    """
+    env = "export PYTHONPATH=/app/.deps:/app PYTHONDONTWRITEBYTECODE=1 && "
+    cmd = (test_command or "").strip()
+    m = re.search(r"pytest\b(.*)$", cmd) if cmd else None
+    if cmd and not m:                      # unittest or a custom command
+        return env + cmd
+    args = m.group(1) if m else " --tb=short -v"
+    if "--junitxml" not in args:
+        args += f" --junitxml={JUNIT_CONTAINER}"
+    return f"{env}python -m pytest{args} -p no:cacheprovider"
 
 
 # ---------------------------------------------------------------------------
@@ -361,10 +392,13 @@ def _parse_stdout_fallback(stdout: str) -> tuple[int, int, int]:
         passed = max(total - fails, 0)
         return total, passed, fails
 
-    # 4. Pytest fallback tokens
-    passed = stdout.count("PASSED")
-    failed = stdout.count("FAILED") + stdout.count("ERROR")
-    if passed + failed > 0:
+    # 4. Pytest summary line: "== 2 failed, 3 passed, 1 error in 0.5s =="
+    p = re.search(r"(\d+)\s+passed", stdout)
+    f = re.search(r"(\d+)\s+failed", stdout)
+    e = re.search(r"(\d+)\s+errors?\b", stdout)
+    if p or f or e:
+        passed = int(p.group(1)) if p else 0
+        failed = (int(f.group(1)) if f else 0) + (int(e.group(1)) if e else 0)
         return passed + failed, passed, failed
 
     # 5. Go test: "--- PASS:", "--- FAIL:"
@@ -449,28 +483,50 @@ def run_code_tests(
             }
 
         has_requirements = os.path.exists(os.path.join(temp_dir, "requirements.txt"))
-        try:
-            run_cmd = _build_run_cmd(test_command, has_requirements, test_files)
-        except ValueError as exc:
-            duration = time.time() - start_time
-            return {
-                "success":          False,
-                "execution_status": "setup_error",
-                "total_tests":      0,
-                "passed_tests":     0,
-                "failed_tests":     0,
-                "errors":           [str(exc)],
-                "raw_output":       "",
-                "summary":          "Test framework could not be determined",
-                "duration_seconds": round(duration, 2),
-            }
         docker_image = _detect_docker_image(files, test_files)
-        cmd = _build_docker_cmd(temp_dir, run_cmd, docker_image=docker_image)
+        is_python = docker_image == RUNTIME_IMAGES["python"]
         effective_timeout = min(timeout_seconds, DOCKER_TIMEOUT_CAP)
 
-        print(f"  [Sandbox] 🐳 Spawning hardened Docker container ({docker_image})...")
-        if has_requirements:
-            print("  [Sandbox] Installing dependencies (output visible)...")
+        def _early(status: str, summary: str, errors: list[str], raw: str = "") -> dict:
+            return {
+                "success": False, "execution_status": status,
+                "total_tests": 0, "passed_tests": 0, "failed_tests": 0,
+                "errors": errors, "raw_output": raw, "summary": summary,
+                "duration_seconds": round(time.time() - start_time, 2),
+            }
+
+        if is_python:
+            # Phase 1 (network ON): install deps + the test tooling into /app/.deps.
+            # pytest/httpx are ALWAYS installed: the generated requirements.txt rarely lists them,
+            # and FastAPI/Starlette TestClient needs httpx.
+            reqs = "-r requirements.txt " if has_requirements else ""
+            install_cmd = f"pip install -q --no-cache-dir --target /app/.deps {reqs}pytest httpx"
+            print(f"  [Sandbox] Phase 1/2: installing dependencies ({docker_image}, network on)...")
+            try:
+                ir = subprocess.run(
+                    _build_docker_cmd(temp_dir, install_cmd, docker_image, network=True),
+                    capture_output=True, text=True, timeout=INSTALL_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                return _early("setup_error", f"Dependency install timed out after {INSTALL_TIMEOUT}s",
+                              [f"pip install did not finish in {INSTALL_TIMEOUT}s (check requirements.txt)."])
+            if ir.returncode != 0:
+                log = ((ir.stderr or "") + (ir.stdout or "")).strip()
+                return _early("setup_error", "Dependency install failed",
+                              [f"[DEPENDENCY] pip install failed (requirements.txt problem): {log[-1500:]}"],
+                              raw=log)
+            run_cmd = _python_test_cmd(test_command)
+            network = False          # Phase 2: AI-generated code runs with NO network
+            print("  [Sandbox] Phase 2/2: running tests (network off)...")
+        else:
+            try:
+                run_cmd = _build_run_cmd(test_command, has_requirements, test_files)
+            except ValueError as exc:
+                return _early("setup_error", "Test framework could not be determined", [str(exc)])
+            network = True
+            print(f"  [Sandbox] Spawning Docker container ({docker_image})...")
+
+        cmd = _build_docker_cmd(temp_dir, run_cmd, docker_image=docker_image, network=network)
 
         # ------------------------------------------------------------------
         # 3. Run inside Docker

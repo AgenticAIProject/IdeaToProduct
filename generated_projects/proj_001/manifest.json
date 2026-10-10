@@ -1,14 +1,13 @@
 {
   "project_id": "proj_001",
-  "generated_at": "2026-09-30T06:02:40.138090",
+  "generated_at": "2026-10-10T08:54:08.133401",
   "files": [
-    "package.json",
-    "src/components/Login.jsx",
-    "src/components/HealthRecords.jsx",
-    "src/components/AdminUserManagement.jsx",
-    "src/App.jsx",
-    "src/main.jsx",
     "index.html",
-    "vite.config.js"
+    "style.css",
+    "app.js",
+    "dataService.js",
+    "test.js",
+    "package.json",
+    "verification.test.js"
   ]
 }

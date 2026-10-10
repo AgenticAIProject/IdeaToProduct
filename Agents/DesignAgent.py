@@ -23,6 +23,16 @@ class APIEndpoint(BaseModel):
     method: str
     path: str
     description: str
+    request_fields: list[str] = Field(
+        default_factory=list,
+        description="Input fields with type and validation rule, e.g. 'title: string, 1-100 chars'.")
+    response_fields: list[str] = Field(
+        default_factory=list,
+        description="Success response body fields with type, e.g. 'id: integer'.")
+    success_status: int = Field(default=200, description="Exact HTTP status on success, e.g. 201.")
+    error_cases: list[str] = Field(
+        default_factory=list,
+        description="Failures as 'condition -> status', e.g. 'unknown id -> 404'.")
     requirement_ids: list[str] = Field(default_factory=list)
 
 

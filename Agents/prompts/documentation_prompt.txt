@@ -25,6 +25,10 @@ You must generate:
 
 RULES:
 - Base all documentation directly on the provided project artifacts.
+- Use the run and test commands from the code artifact exactly as given.
+- Be honest about quality: if the test results show failures or the review was not approved,
+  add a "Known Issues" section listing them. Never claim "verified" or "all tests passed" unless the
+  test results say so.
 - Do NOT invent features that are not in the requirements, design, or code.
 - Format all outputs with clean GitHub-flavored Markdown.
 - Return the structured documentation document adhering to the schema.
