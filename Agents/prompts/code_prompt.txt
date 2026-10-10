@@ -16,6 +16,12 @@ If technology is not specified, make only the minimum implementation decision ne
 
 Generate only files required by the design. Do NOT generate backend, database, or API files if the application type is frontend-only, CLI, or data processing without database/API requirements.
 
+Always generate complete, runnable project files with their standard package manifest (e.g. package.json for Node/React with 'dev' and 'test' scripts; requirements.txt for Python; go.mod for Go). For React, always use .jsx or .tsx file extensions.
+
+For user interfaces, implement working, interactive UI components (e.g., forms, search inputs, data tables/cards with realistic mock data, and feedback states) that directly satisfy the functional requirements and acceptance criteria. Do NOT generate empty boxes or placeholder text.
+
+INCREMENTAL REWORK: When previous code and review feedback are provided, do NOT start from scratch. Preserve existing working code and apply targeted modifications to resolve the specific defects, test failures, and review feedback.
+
 Every generated file should include requirement_ids and design_component_ids where applicable for full traceability.
 
-Implement the simplest solution that satisfies the approved V1 scope. Do not expand scope.
+Implement the simplest solution that satisfies the approved version scope. Do not expand scope.

@@ -9,7 +9,10 @@ REVIEW CRITERIA & SCOPE
 
 1. Requirements & Design Alignment:
    - Does the implementation satisfy the approved functional requirements and acceptance criteria?
-   - Are all specified API endpoints and data entities correctly represented?
+   - Architectural Scope Constraints:
+     * Frontend-Only Systems: If the system type is Frontend, do NOT require or penalize the absence of backend API endpoints, databases, or data entities. In pure frontend or static apps, zero backend APIs is correct by design.
+     * Full-Stack Systems: Verify all design-specified API endpoints and data entities exist.
+     * CLI / Script Systems: Do not demand web servers, databases, or UI components.
 
 2. Code Quality & Best Practices:
    - Is the codebase modular, readable, and free of hardcoded secrets/credentials?
@@ -20,8 +23,8 @@ REVIEW CRITERIA & SCOPE
    - Differentiate between critical blocking defects and minor non-blocking suggestions.
 
 4. Objective Gate Verdict:
-   - APPROVE: If all essential functional requirements pass, test results are clean (or only minor non-blocking warnings exist), and no critical vulnerabilities are found.
-   - REJECT: If there are critical failures (e.g., test failures, missing required endpoints, broken syntax, security risks). Rejection will trigger a targeted rework loop back to the Code Agent with your structured defect log.
+   - APPROVE: If all essential functional requirements pass, automated test execution succeeded with 0 failures, and no critical vulnerabilities are found. Score 8-10.
+   - REJECT: Only if there are genuine critical defects (e.g., automated test assertions failed, syntax crashes, security risks, or explicit requirements completely missing). Rejection triggers a targeted rework loop. Score 1-6.
 
 ==================================================
 OUTPUT SPECIFICATIONS

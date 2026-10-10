@@ -41,8 +41,10 @@ class EdgeCase(BaseModel):
 
 
 class TechnologyChoice(BaseModel):
-    category: str = Field(description="Category of choice, e.g. 'backend', 'database', 'frontend', 'cli'")
-    technology: str = Field(description="Selected technology name, e.g. 'FastAPI', 'PostgreSQL', 'React'")
+    category: str = Field(
+        description="Core architecture category: 'language' (Python, Go, Java, TypeScript, Rust), 'backend' (FastAPI, Gin, Spring Boot, Flask, Express), 'frontend' (HTML/CSS/JS, React, Vue, Svelte), 'database' (PostgreSQL, MongoDB, SQLite, MySQL, Redis), 'testing' (pytest, go test, JUnit, Jest)"
+    )
+    technology: str = Field(description="Selected technology name, e.g. 'Go', 'Python', 'FastAPI', 'PostgreSQL', 'MongoDB', 'React'")
     reason: str = Field(description="Reason for selection")
 
 
@@ -72,7 +74,13 @@ class DesignDocument(BaseModel):
     )
 
     technology_choices: list[TechnologyChoice] = Field(
-        default_factory=list
+        default_factory=list,
+        description="Core architectural technology choices (language, frontend, backend, database, testing)."
+    )
+
+    libraries_and_tools: list[str] = Field(
+        default_factory=list,
+        description="Auxiliary libraries, HTTP clients, ORMs, styling toolkits, and utility packages (e.g. Axios, Pydantic, SQLAlchemy, TailwindCSS, Bcrypt, Requests). Never place these in frontend/backend."
     )
 
     design_decisions: list[DesignDecision] = Field(

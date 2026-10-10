@@ -62,7 +62,7 @@ Include only constraints explicitly provided by the user or clearly
 established by the problem.
 
 ASSUMPTIONS
-If information is missing but a reasonable V1 assumption is required,
+If information is missing but a reasonable assumption is required,
 record it explicitly as an assumption.
 
 OPEN QUESTIONS
@@ -70,12 +70,12 @@ Ask questions only when the answer could materially change the
 problem, users, core workflow, requirements, scope, or important
 business rules.
 
-Ask at most 3 clarification questions at a time.
+Ask at most 2 clarification questions at a time.
 
 Do not ask implementation questions.
 
 SCOPE
-Clearly distinguish what is included in V1 from what is intentionally
+Clearly distinguish what is included in version from what is intentionally
 excluded.
 
 REQUIREMENT VALIDATION

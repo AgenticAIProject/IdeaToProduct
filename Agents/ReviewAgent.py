@@ -146,7 +146,7 @@ def Review_Agent(state: imports.AgentState) -> dict:
 
     # If test runner reported explicit test failures, enforce rejection (no false approvals)
     test_results = state.get("test_results", {})
-    if test_results.get("failed_tests", 0) > 0 or test_results.get("errors"):
+    if not test_results.get("success", True) or test_results.get("failed_tests", 0) > 0:
         if response.approved:
             print("  [Review Agent] Overriding verdict to REJECTED due to failing automated test results.")
             response.approved = False

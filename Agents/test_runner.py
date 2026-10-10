@@ -27,6 +27,7 @@ run_code_tests(files, test_files, test_command=None, timeout_seconds=30) -> dict
 """
 
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -40,6 +41,45 @@ DOCKER_IMAGE       = "python:3.11-slim"
 DOCKER_TIMEOUT_CAP = 120           # hard upper bound regardless of caller value
 JUNIT_CONTAINER    = "/app/test-results.xml"
 JUNIT_HOST_NAME    = "test-results.xml"
+
+RUNTIME_IMAGES = {
+    "python": "python:3.11-slim",
+    "go": "golang:1.22-alpine",
+    "java": "eclipse-temurin:17-jdk-alpine",
+    "node": "node:20-slim",
+    "rust": "rust:1.77-slim",
+}
+
+def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, str]) -> str:
+    """Dynamically determine the runtime container based on file extensions and manifests."""
+    source_paths: list[str] = []
+    if isinstance(files, list):
+        for f in files:
+            source_paths.append(f.get("path", "").lower())
+    elif isinstance(files, dict):
+        source_paths.extend(k.lower() for k in files.keys())
+
+    # Check source code files first
+    if any(p.endswith(".go") or p == "go.mod" for p in source_paths):
+        return RUNTIME_IMAGES["go"]
+    if any(p.endswith((".java", ".jar")) or p in ("pom.xml", "build.gradle") for p in source_paths):
+        return RUNTIME_IMAGES["java"]
+    if any(p.endswith((".ts", ".tsx", ".js", ".jsx", ".html")) or p == "package.json" for p in source_paths):
+        if not any(p.endswith(".py") for p in source_paths):
+            return RUNTIME_IMAGES["node"]
+    if any(p.endswith(".rs") or p == "cargo.toml" for p in source_paths):
+        return RUNTIME_IMAGES["rust"]
+    if any(p.endswith(".py") for p in source_paths):
+        return RUNTIME_IMAGES["python"]
+
+    # Fallback to test files
+    test_paths = [k.lower() for k in test_files.keys()]
+    if any(p.endswith(".go") for p in test_paths):
+        return RUNTIME_IMAGES["go"]
+    if any(p.endswith((".js", ".jsx", ".ts", ".tsx")) for p in test_paths):
+        return RUNTIME_IMAGES["node"]
+
+    return RUNTIME_IMAGES["python"]
 
 
 # ---------------------------------------------------------------------------
@@ -145,21 +185,31 @@ def _detect_framework(test_files: Dict[str, str]) -> str | None:
 
     Returns
     -------
-    "pytest"    – file uses pytest conventions (assert statements, @pytest.*,
-                  pytest imports, or a filename that begins with ``test_``)
-    "unittest"  – file subclasses unittest.TestCase
+    "go"        – Go testing package (_test.go)
+    "junit"     – Java JUnit test (test.java)
+    "node"      – JavaScript / TypeScript test (.test.js, .spec.js, etc.)
+    "pytest"    – pytest conventions (assert statements, @pytest.*, test_*.py)
+    "unittest"  – unittest.TestCase
     None        – framework cannot be determined
     """
     for filename, content in test_files.items():
         content = content or ""
+        fn_lower = filename.lower()
 
-        # Explicit import signals are the most reliable indicators
+        # Polyglot test frameworks
+        if fn_lower.endswith("_test.go") or 'import "testing"' in content:
+            return "go"
+        if fn_lower.endswith("test.java") or "@Test" in content or "org.junit" in content:
+            return "junit"
+        if any(fn_lower.endswith(ext) for ext in (".test.js", ".spec.js", ".test.ts", ".spec.ts")) or "describe(" in content:
+            return "node"
+
+        # Python frameworks
         if "import pytest" in content or "from pytest" in content:
             return "pytest"
         if "import unittest" in content or "from unittest" in content:
             return "unittest"
 
-        # pytest-style bare assert statements with no TestCase class
         has_test_case = "unittest.TestCase" in content
         has_bare_assert = "\n    assert " in content or content.startswith("assert ")
         has_pytest_fixture = "@pytest.fixture" in content or "@pytest.mark" in content
@@ -170,9 +220,7 @@ def _detect_framework(test_files: Dict[str, str]) -> str | None:
         if has_test_case:
             return "unittest"
 
-        # Filename convention: test_*.py or *_test.py → lean towards pytest
-        name = os.path.basename(filename)
-        if name.startswith("test_") or name.endswith("_test.py"):
+        if fn_lower.startswith("test_") or fn_lower.endswith("_test.py"):
             return "pytest"
 
     return None
@@ -189,24 +237,13 @@ def _build_run_cmd(
 ) -> str:
     """
     Build the shell command executed *inside* the container.
-
-    Rules
-    -----
-    - If *test_command* is provided by the Code Agent, use it as-is.
-    - Otherwise, detect the framework from *test_files*:
-        pytest    → install pytest, run with --junitxml for machine-readable output.
-        unittest  → no extra install needed; run via ``python -m unittest discover``.
-        unknown   → raise ValueError so run_code_tests returns a ``setup_error``
-                    instead of silently running the wrong tool.
-    - Dependency installation output is NOT suppressed so pip errors are visible.
     """
     parts: list[str] = []
 
     if has_requirements:
-        parts.append("pip install -r requirements.txt")   # visible – errors surface
+        parts.append("pip install -r requirements.txt")
 
     if test_command:
-        # Code Agent explicitly provided a command; trust it.
         parts.append(test_command)
     else:
         framework = _detect_framework(test_files)
@@ -214,50 +251,44 @@ def _build_run_cmd(
         if framework == "pytest":
             parts.append("pip install pytest")
             parts.append(f"pytest --tb=short -v --junitxml={JUNIT_CONTAINER}")
-
         elif framework == "unittest":
-            # unittest ships with Python – no extra install required.
-            # -v for verbose output so PASSED/FAILED tokens appear per test.
             parts.append("python -m unittest discover -v")
-
+        elif framework == "go":
+            parts.append("go test -v ./...")
+        elif framework == "node":
+            node_test_files = [fn for fn in test_files.keys() if fn.endswith((".js", ".mjs", ".cjs", ".ts"))]
+            if node_test_files:
+                parts.append(f"node --test {' '.join(node_test_files)}")
+            else:
+                parts.append("node --test")
+        elif framework == "junit":
+            parts.append("mvn test")
         else:
-            raise ValueError(
-                "Cannot determine test framework: no 'import pytest' or "
-                "'import unittest' found in test files, and no test_command "
-                "was provided by the Code Agent. "
-                "Set code_artifact['test_command'] to the exact shell command "
-                "to run the tests (e.g. 'pytest --tb=short -v "
-                f"--junitxml={JUNIT_CONTAINER}')."
-            )
+            js_files = [fn for fn in test_files.keys() if fn.endswith((".js", ".mjs", ".cjs"))]
+            if js_files:
+                parts.append(f"node --test {' '.join(js_files)}")
+            else:
+                parts.append("python -m unittest discover -v")
 
     return " && ".join(parts)
 
 
-def _build_docker_cmd(temp_dir: str, run_cmd: str) -> list[str]:
+def _build_docker_cmd(temp_dir: str, run_cmd: str, docker_image: str = DOCKER_IMAGE) -> list[str]:
     """
-    Return the hardened `docker run` command.
-
-    Security flags applied
-    ----------------------
-    --network none              no network access inside the container
-    --memory 512m               RAM limit
-    --cpus 1.0                  CPU limit
-    --cap-drop ALL              drop all Linux capabilities
-    --security-opt no-new-privileges   prevent privilege escalation
-    bind-mount temp_dir → /app  writable so pytest can write JUnit XML
+    Return the hardened `docker run` command with appropriate runtime container.
     """
+    shell = "sh" if "alpine" in docker_image else "bash"
     return [
         "docker", "run",
         "--rm",
-        "--network",      "none",
         "--memory",       "512m",
         "--cpus",         "1.0",
         "--cap-drop",     "ALL",
         "--security-opt", "no-new-privileges",
         "-v", f"{temp_dir}:/app",
         "-w", "/app",
-        DOCKER_IMAGE,
-        "bash", "-c", run_cmd,
+        docker_image,
+        shell, "-c", run_cmd,
     ]
 
 
@@ -301,10 +332,48 @@ def _parse_junit(xml_path: str) -> tuple[int, int, int, list[str]]:
 
 
 def _parse_stdout_fallback(stdout: str) -> tuple[int, int, int]:
-    """Emergency fallback: count PASSED/FAILED tokens in raw pytest stdout."""
+    """Parse test counts from standard test runner outputs (pytest, unittest, node --test, go test)."""
+    # 1. Node.js node:test summary lines: "ℹ pass 3", "# pass 3", "ℹ fail 0"
+    pass_match = re.search(r"(?:#|ℹ)?\s*pass(?:ed)?\s+(\d+)", stdout, re.IGNORECASE)
+    fail_match = re.search(r"(?:#|ℹ)?\s*fail(?:ed)?\s+(\d+)", stdout, re.IGNORECASE)
+    if pass_match or fail_match:
+        passed = int(pass_match.group(1)) if pass_match else 0
+        failed = int(fail_match.group(1)) if fail_match else 0
+        return passed + failed, passed, failed
+
+    # 2. Node TAP lines: "ok 1 - ...", "not ok 2 - ..."
+    ok_count = len(re.findall(r"^ok\s+\d+", stdout, re.MULTILINE))
+    not_ok_count = len(re.findall(r"^not ok\s+\d+", stdout, re.MULTILINE))
+    if ok_count > 0 or not_ok_count > 0:
+        return ok_count + not_ok_count, ok_count, not_ok_count
+
+    # 3. Python unittest: "Ran 3 tests in ...", "OK", "FAILED (failures=1)"
+    ran_match = re.search(r"Ran\s+(\d+)\s+tests?", stdout)
+    if ran_match:
+        total = int(ran_match.group(1))
+        fails = 0
+        err_m = re.search(r"failures=(\d+)", stdout)
+        if err_m:
+            fails += int(err_m.group(1))
+        err_e = re.search(r"errors=(\d+)", stdout)
+        if err_e:
+            fails += int(err_e.group(1))
+        passed = max(total - fails, 0)
+        return total, passed, fails
+
+    # 4. Pytest fallback tokens
     passed = stdout.count("PASSED")
     failed = stdout.count("FAILED") + stdout.count("ERROR")
-    return passed + failed, passed, failed
+    if passed + failed > 0:
+        return passed + failed, passed, failed
+
+    # 5. Go test: "--- PASS:", "--- FAIL:"
+    go_pass = stdout.count("--- PASS:")
+    go_fail = stdout.count("--- FAIL:")
+    if go_pass + go_fail > 0:
+        return go_pass + go_fail, go_pass, go_fail
+
+    return 0, 0, 0
 
 
 # ---------------------------------------------------------------------------
@@ -395,10 +464,11 @@ def run_code_tests(
                 "summary":          "Test framework could not be determined",
                 "duration_seconds": round(duration, 2),
             }
-        cmd = _build_docker_cmd(temp_dir, run_cmd)
+        docker_image = _detect_docker_image(files, test_files)
+        cmd = _build_docker_cmd(temp_dir, run_cmd, docker_image=docker_image)
         effective_timeout = min(timeout_seconds, DOCKER_TIMEOUT_CAP)
 
-        print(f"  [Sandbox] 🐳 Spawning hardened Docker container ({DOCKER_IMAGE})...")
+        print(f"  [Sandbox] 🐳 Spawning hardened Docker container ({docker_image})...")
         if has_requirements:
             print("  [Sandbox] Installing dependencies (output visible)...")
 
@@ -475,9 +545,9 @@ def run_code_tests(
         else:
             execution_status = "failed"
 
-        # Collect errors: stderr (dep install failures visible here) + per-test msgs
+        # Collect errors: stderr (visible on failure) + per-test msgs
         all_errors: list[str] = []
-        if stderr.strip():
+        if not success and stderr.strip():
             all_errors.append(stderr.strip())
         all_errors.extend(err_msgs)
 

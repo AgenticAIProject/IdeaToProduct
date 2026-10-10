@@ -203,22 +203,15 @@ Tests must be deterministic and runnable in an isolated environment.
 8. TEST FRAMEWORK
 ==================================================
 
-Generate executable Python tests using pytest or unittest.
+Generate executable tests matching the project's programming language and runtime:
+- JavaScript / Frontend / Node.js: Use Node.js built-in 'node:test', 'node:assert', and 'node:fs'. Do NOT require uninstalled packages like jest or mocha.
+- Python: Use pytest or unittest.
+- Go: Use standard 'testing' package.
+- Java: Use standard JUnit.
 
-Prefer the testing framework already specified by the project or supported by the generated code.
-
+Prefer the testing framework and language matching the generated source code.
 Do not introduce unnecessary testing dependencies.
-
-Tests must directly import the implementation under test.
-
-Examples:
-
-    from app import create_goal
-
-    from models import Goal
-
-    from services.goal_service import GoalService
-
+Tests must directly verify or test the implementation under test.
 Do NOT copy implementation code into the test file.
 
 ==================================================
@@ -276,7 +269,7 @@ If acceptance criteria do not contain IDs, use the available requirement referen
 11. TEST CODE
 ==================================================
 
-The generated test_file_content must contain COMPLETE executable Python code.
+The generated test_file_content must contain COMPLETE executable test code matching the project language.
 
 Do not return:
 
@@ -286,9 +279,9 @@ Do not return:
 - Incomplete functions
 - Placeholder comments such as "implement this"
 - Fake assertions
-- Tests that cannot import the supplied implementation
+- Tests that cannot run in the project's runtime
 
-The generated code must be ready to save directly as a .py test file.
+The generated code must be ready to save directly as a valid test file.
 
 ==================================================
 12. TEST PLAN
@@ -387,7 +380,7 @@ The output must contain:
 - test_file_name
 - test_file_content
 
-The test_file_content must be complete executable Python code.
+The test_file_content must be complete executable test code matching the project stack.
 
 Remember:
 

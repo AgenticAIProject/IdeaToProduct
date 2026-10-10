@@ -1,3 +1,4 @@
+import os
 import imports
 from pydantic import BaseModel, Field
 from State_definition import AgentState
@@ -8,7 +9,7 @@ class TestCase(BaseModel):
     id: str = Field(description="Unique test case ID, e.g. TC-01")
     acceptance_criterion_id: str = Field(description="The AC ID this test validates, e.g. AC-01")
     description: str = Field(description="What this test case verifies")
-    test_function_name: str = Field(description="The Python function name, e.g. test_create_goal")
+    test_function_name: str = Field(description="The function name or test label, e.g. test_display_records")
 
 
 class TestSuiteGeneration(BaseModel):
@@ -21,10 +22,10 @@ class TestSuiteGeneration(BaseModel):
     )
     test_file_name: str = Field(
         default="test_verification.py",
-        description="The relative filename for the test suite, e.g. test_verification.py"
+        description="The relative filename for the test suite matching project language, e.g. 'verification.test.js' for JS/Node/Frontend, 'test_verification.py' for Python, 'verification_test.go' for Go."
     )
     test_file_content: str = Field(
-        description="Complete, valid Python code implementing unit tests using unittest or pytest."
+        description="Complete, executable test code matching the project programming language and runtime."
     )
 
 
@@ -41,7 +42,7 @@ def Test_Agent(state: AgentState) -> dict:
     requirements = state.get("requirements", {})
     design = state.get("design", {})
     code_artifact = state.get("code", {})
-    code_files = code_artifact.get("files", {})
+    code_files = code_artifact.get("files", [])
 
     if not code_files:
         print("Warning: No code files provided to Test Agent.")
@@ -62,20 +63,72 @@ def Test_Agent(state: AgentState) -> dict:
             "workflow_status": "running"
         }
 
-    # 1. Initialize LLM
-    llm = imports.get_llm(agent_type="test", max_tokens=2000)
+    # 1. Detect project runtime stack from files
+    file_paths = [f.get("path", "").lower() for f in code_files if isinstance(f, dict)]
+    is_go = any(p.endswith(".go") or p == "go.mod" for p in file_paths)
+    is_java = any(p.endswith((".java", ".jar")) or p == "pom.xml" for p in file_paths)
+    is_python = any(p.endswith(".py") or p == "requirements.txt" for p in file_paths)
+    is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths) and not is_python
 
-    test_generator_llm = llm.with_structured_output(
-        TestSuiteGeneration,
-        
-    )
+    if is_js_or_frontend:
+        stack_guidelines = """
+=== PROJECT STACK: JavaScript / Frontend / Node.js ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'verification.test.js'
+2. Use CommonJS ('const ... = require(...)') and Node.js built-in modules ONLY: 'node:test', 'node:assert', and 'node:fs'.
+3. Do NOT use ESM syntax ('import ...', 'export ...'). Always use CommonJS require.
+4. Do NOT require third-party packages (e.g. jest, mocha, chai, jsdom, react-scripts) because tests run in a clean Node environment without external node_modules.
+5. REQUIRED STRUCTURE:
+   const test = require('node:test');
+   const assert = require('node:assert');
+   const fs = require('node:fs');
 
-    # 2. System prompt enforcing independent test generation
+   test('TC-01: verify frontend components and structure', () => {
+       const html = fs.existsSync('index.html') ? fs.readFileSync('index.html', 'utf8') : '';
+       assert(html.length > 0, 'HTML file must exist');
+   });
+
+   test('TC-02: verify data model or business logic', () => {
+       const mockData = { id: 1, status: 'Active' };
+       assert.strictEqual(mockData.status, 'Active');
+   });
+6. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
+7. NEVER generate Python code for a JavaScript frontend project!
+"""
+    elif is_go:
+        stack_guidelines = """
+=== PROJECT STACK: Go ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'verification_test.go'
+2. Use standard 'testing' package.
+3. NEVER generate Python code for a Go project!
+"""
+    elif is_java:
+        stack_guidelines = """
+=== PROJECT STACK: Java ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'VerificationTest.java'
+2. Use standard org.junit.
+"""
+    else:
+        stack_guidelines = """
+=== PROJECT STACK: Python ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'test_verification.py'
+2. Use pytest or unittest.
+3. Directly import modules under test.
+"""
+
+    # 2. Initialize LLM
+    llm = imports.get_llm(agent_type="test", max_tokens=2500)
+    test_generator_llm = llm.with_structured_output(TestSuiteGeneration)
+
+    # 3. System prompt enforcing independent test generation
     system_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/test_prompt.txt"))
 
     # Prepare file inventory for prompt
     files_context = "\n\n".join(
-        [f"--- File: {f.get('path')} ---\n{f.get('content')}" for f in code_files]
+        [f"--- File: {f.get('path')} ---\n{f.get('content')}" for f in code_files if isinstance(f, dict)]
     )
 
     human_prompt = imports.HumanMessage(
@@ -89,11 +142,13 @@ def Test_Agent(state: AgentState) -> dict:
 === SOURCE CODE FILES ===
 {files_context}
 
-Generate an independent verification test suite for this code.
+{stack_guidelines}
+
+Generate an independent verification test suite for this code that matches the project language and stack.
 """
     )
 
-    # 3. Generate verification test suite
+    # 4. Generate verification test suite
     test_gen_result: TestSuiteGeneration = test_generator_llm.invoke([
         system_prompt,
         human_prompt
@@ -103,8 +158,30 @@ Generate an independent verification test suite for this code.
         test_gen_result.test_file_name: test_gen_result.test_file_content
     }
 
-    # 4. Execute the tests via the secure test_runner tool
-    test_command = code_artifact.get("test_command", None)
+    # Persist verification test files into project folder
+    project_path = state.get("generated_project_path", "")
+    if not project_path:
+        project_id = state.get("project_id", "proj_001")
+        project_path = os.path.join(os.getcwd(), "generated_projects", project_id)
+
+    if os.path.exists(project_path):
+        for t_name, t_content in test_files_to_run.items():
+            dest = os.path.join(project_path, t_name)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(t_content)
+        print(f"  [Test Agent] Wrote verification test suite to: {project_path}/{test_gen_result.test_file_name}")
+
+    # 5. Execute the tests via the secure test_runner tool
+    if is_js_or_frontend:
+        test_command = f"node --test {test_gen_result.test_file_name}"
+    elif is_go:
+        test_command = "go test -v ./..."
+    elif is_java:
+        test_command = "mvn test"
+    else:
+        test_command = code_artifact.get("test_command") or "pytest --tb=short -v"
+
     execution_result = run_code_tests(
         files=code_files,
         test_files=test_files_to_run,

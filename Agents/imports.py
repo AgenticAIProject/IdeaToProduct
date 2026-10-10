@@ -27,11 +27,11 @@ from pydantic import BaseModel, Field
 
 
 MODELS = {
-    "requirement": "openai/gpt-4o-mini",    #working 
-    "code": "google/gemma-2-9b-it",  # working 
-    "design": "openai/gpt-4o-mini",  # working
-    "review": "openai/gpt-4o-mini",  # working
-    "test": "openai/gpt-4o-mini",  # working
+    "requirement": "openai/gpt-4o-mini",    # working 
+    "code": "openai/gpt-4o-mini",           # working 
+    "design": "openai/gpt-4o-mini",         # working
+    "review": "openai/gpt-4o-mini",         # working
+    "test": "openai/gpt-4o-mini",           # working
     "documentation": "openai/gpt-4o-mini"
 }
 
