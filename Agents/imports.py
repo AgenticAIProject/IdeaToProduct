@@ -56,8 +56,13 @@ MODELS = {
 
 def get_llm(agent_type: str = "requirement", max_tokens: int = 2000) -> ChatOpenRouter:
     """Centralized LLM initialization."""
+    model = MODELS.get(agent_type, "openai/gpt-4o-mini")
+    if agent_type == "code":
+        model = os.environ.get("CODE_MODEL", model)
+    elif agent_type == "test":
+        model = os.environ.get("TEST_MODEL", model)
     return ChatOpenRouter(
-        model=MODELS.get(agent_type, "openai/gpt-4o-mini"),
+        model=model,
         max_tokens=max_tokens
     )
 

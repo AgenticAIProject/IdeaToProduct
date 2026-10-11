@@ -27,3 +27,9 @@ Thumbs.db
 
 info.md
 generated_projects
+
+code_agent_smoke.py
+test_agent_smoke.py
+
+TEST_AGENT_TESTING.md
+CODE_AGENT_TESTING.md
