@@ -55,9 +55,30 @@ class TestPlan(BaseModel):
 
 
 def _strip_fences(text: str) -> str:
+    """Extract raw code from LLM output that may contain preamble, fences, and postamble."""
     t = text.strip()
-    m = re.match(r"^```[\w+-]*\n(.*?)\n?```$", t, re.DOTALL)
-    return m.group(1) if m else t
+    m = re.search(r"```[\w+-]*\n(.*?)\n```", t, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # No fences — strip commentary lines at the top/bottom
+    lines = t.splitlines()
+    while lines and _is_commentary(lines[0]):
+        lines.pop(0)
+    while lines and _is_commentary(lines[-1]):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _is_commentary(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    starts = (
+        "#", "certainly", "sure", "here is", "here's", "below is", "below are",
+        "it appears", "it seems", "the complete", "the file", "note:", "explanation",
+        "---",
+    )
+    return s.lower().startswith(starts)
 
 
 def _text(msg) -> str:
@@ -94,6 +115,16 @@ def _validate_test_file(name: str, content: str):
                 p = t.name
             try:
                 r = subprocess.run(["node", "--check", p], capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    return r.stderr.strip()[:500]
+            finally:
+                os.unlink(p)
+        elif name.endswith((".c", ".h")) and shutil.which("gcc"):
+            with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False, encoding="utf-8") as t:
+                t.write(content)
+                p = t.name
+            try:
+                r = subprocess.run(["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", p], capture_output=True, text=True, timeout=15)
                 if r.returncode != 0:
                     return r.stderr.strip()[:500]
             finally:
@@ -163,6 +194,7 @@ def Test_Agent(state: AgentState) -> dict:
     file_paths = [f.get("path", "").lower() for f in code_files if isinstance(f, dict)]
     is_go = any(p.endswith(".go") or p == "go.mod" for p in file_paths)
     is_java = any(p.endswith((".java", ".jar")) or p == "pom.xml" for p in file_paths)
+    is_c = any(p.endswith((".c", ".h")) for p in file_paths)
     is_python = any(p.endswith(".py") or p == "requirements.txt" for p in file_paths)
     is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths) and not is_python
 
@@ -199,6 +231,18 @@ CRITICAL TESTING INSTRUCTIONS:
 1. Target filename: 'VerificationTest.java'
 2. Use standard org.junit.
 """
+    elif is_c:
+        stack_guidelines = """
+=== PROJECT STACK: C ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'test_verification.c'
+2. Use standard C99/C11 features only: stdio.h, stdlib.h, assert.h, string.h, errno.h, math.h.
+3. NEVER generate Python code for a C project.
+4. Use a single executable test harness that calls the real functions declared in the project headers.
+5. Include the project header files directly, e.g. #include \"input_parser.h\" or #include \"operation_executor.h\".
+6. Use assert() and printf() to validate behavior; do not mock away business logic.
+7. Compile the test harness with GCC in the runner using the project .c files, excluding the app main if present.
+"""
     else:
         stack_guidelines = """
 === PROJECT STACK: Python ===
@@ -215,6 +259,8 @@ CRITICAL TESTING INSTRUCTIONS:
         default_name, test_command = "verification_test.go", "go test -v ./..."
     elif is_java:
         default_name, test_command = "VerificationTest.java", "mvn test"
+    elif is_c:
+        default_name, test_command = "test_verification.c", None
     else:
         default_name = "test_verification.py"
         test_command = code_artifact.get("test_command") or "pytest --tb=short -v"

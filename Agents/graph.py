@@ -5,6 +5,7 @@ from DesignAgent import Design_Agent
 from ReviewAgent import Review_Agent
 from TestAgent import Test_Agent
 from DocumentationAgent import Documentation_Agent
+from ReleaseAgent import Release_Agent
 from CodeAgent import Code_Agent
 
 
@@ -30,6 +31,10 @@ def review_node(state: AgentState) -> dict:
 
 def documentation_node(state: AgentState) -> dict:
     return Documentation_Agent(state)
+
+
+def release_node(state: AgentState) -> dict:
+    return Release_Agent(state)
 
 
 def requirement_router(state: AgentState):
@@ -63,6 +68,12 @@ def review_router(state: AgentState):
     return "rejected"
 
 
+def documentation_router(state: AgentState):
+    if state.get("approval_status") == "approved":
+        return "release"
+    return "end"
+
+
 builder = StateGraph(AgentState)  # pyrefly: ignore[bad-specialization]
 
 builder.add_node("requirement", requirement_node)
@@ -71,6 +82,7 @@ builder.add_node("code", code_node)
 builder.add_node("test", test_node)
 builder.add_node("review", review_node)
 builder.add_node("documentation", documentation_node)
+builder.add_node("release", release_node)
 
 builder.set_entry_point("requirement")
 
@@ -103,7 +115,16 @@ builder.add_conditional_edges(
     }
 )
 
-builder.add_edge("documentation", END)
+builder.add_conditional_edges(
+    "documentation",
+    documentation_router,
+    {
+        "release": "release",
+        "end": END,
+    }
+)
+
+builder.add_edge("release", END)
 
 from langgraph.checkpoint.memory import MemorySaver
 

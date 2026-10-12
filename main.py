@@ -17,7 +17,7 @@ def main():
     initial_state: AgentState = {
         "project_id": "proj_001",
         "user_id": "user_001",
-        "idea": "Build a frontend to show health records.",
+        "idea": "Build a calculator in c language.",
         
         "clarification_questions": [],
         "user_answers": [],
@@ -41,6 +41,8 @@ def main():
         
         "documentation": {},
         "documentation_version": 0,
+        "release": {},
+        "release_version": 0,
         
         "current_stage": "requirements",
         "workflow_status": "starting",

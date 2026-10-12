@@ -57,6 +57,8 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 "review_version": 0,
                 "documentation": {},
                 "documentation_version": 0,
+                "release": {},
+                "release_version": 0,
                 "current_stage": "requirements",
                 "workflow_status": "starting",
                 "retry_count": {

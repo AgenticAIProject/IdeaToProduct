@@ -38,6 +38,10 @@ class AgentState(TypedDict):
     documentation: dict
     documentation_version: int
 
+    # Release
+    release: dict
+    release_version: int
+
     # Workflow
     current_stage: str
     workflow_status: str

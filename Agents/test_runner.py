@@ -49,6 +49,7 @@ RUNTIME_IMAGES = {
     "java": "eclipse-temurin:17-jdk-alpine",
     "node": "node:20-slim",
     "rust": "rust:1.77-slim",
+    "c": "gcc:13",
 }
 
 def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, str]) -> str:
@@ -65,6 +66,8 @@ def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, s
         return RUNTIME_IMAGES["go"]
     if any(p.endswith((".java", ".jar")) or p in ("pom.xml", "build.gradle") for p in source_paths):
         return RUNTIME_IMAGES["java"]
+    if any(p.endswith((".c", ".h")) for p in source_paths):
+        return RUNTIME_IMAGES["c"]
     if any(p.endswith((".ts", ".tsx", ".js", ".jsx", ".html")) or p == "package.json" for p in source_paths):
         if not any(p.endswith(".py") for p in source_paths):
             return RUNTIME_IMAGES["node"]
@@ -235,6 +238,7 @@ def _build_run_cmd(
     test_command: str | None,
     has_requirements: bool,
     test_files: Dict[str, str],
+    source_files: list[str] | None = None,
 ) -> str:
     """
     Build the shell command executed *inside* the container.
@@ -264,6 +268,16 @@ def _build_run_cmd(
                 parts.append("node --test")
         elif framework == "junit":
             parts.append("mvn test")
+        elif framework == "c":
+            project_sources = [
+                fn for fn in (source_files or [])
+                if fn.endswith(".c") and not fn.endswith("main.c")
+            ]
+            compile_sources = sorted(set(project_sources + [fn for fn in test_files.keys() if fn.endswith(".c")]))
+            if not compile_sources:
+                compile_sources = sorted(fn for fn in test_files.keys() if fn.endswith(".c"))
+            compile_list = " ".join(compile_sources)
+            parts.append(f"gcc -std=c11 -Wall -Wextra -Werror -I/app -o /tmp/test_binary {compile_list} && /tmp/test_binary")
         else:
             js_files = [fn for fn in test_files.keys() if fn.endswith((".js", ".mjs", ".cjs"))]
             if js_files:
@@ -524,11 +538,23 @@ def run_code_tests(
             print("  [Sandbox] Phase 2/2: running tests (network off)...")
         else:
             try:
-                run_cmd = _build_run_cmd(test_command, has_requirements, test_files)
+                source_paths = [
+                    entry.get("path") if isinstance(entry, dict) else str(entry)
+                    for entry in (files if isinstance(files, list) else [])
+                ]
+                source_paths.extend(
+                    key for key in (files if isinstance(files, dict) else {})
+                )
+                source_paths = sorted(set(p for p in source_paths if p))
+                run_cmd = _build_run_cmd(test_command, has_requirements, test_files, source_paths)
             except ValueError as exc:
                 return _early("setup_error", "Test framework could not be determined", [str(exc)])
-            network = True
-            print(f"  [Sandbox] Spawning Docker container ({docker_image})...")
+            network = False
+            print(f"  [Sandbox] Phase 1/2: installing dependencies ({docker_image}, network on)...")
+            if docker_image == RUNTIME_IMAGES["c"]:
+                print("  [Sandbox] Phase 2/2: running tests (network off)...")
+            else:
+                print(f"  [Sandbox] Spawning Docker container ({docker_image})...")
 
         cmd = _build_docker_cmd(temp_dir, run_cmd, docker_image=docker_image, network=network)
 

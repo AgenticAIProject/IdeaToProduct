@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 import imports
 from State_definition import AgentState
 from stack_skills import stack_skill
-from tools import repo_scaffold
+from tools import WORKSPACE_ROOT, repo_scaffold
 
 MAX_REPAIR_ATTEMPTS = 2
 MAX_CONTINUATIONS = 2          # how often we ask the model to continue a cut-off file
@@ -116,10 +116,41 @@ def feedback_context(state: AgentState) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def strip_fences(text: str) -> str:
-    """Remove ``` fences only. Never touch the code itself."""
+    """Extract raw code from LLM output that may contain preamble, fences, and postamble.
+
+    Handles patterns like:
+      - "Certainly! Here is the file:\n```js\n<code>\n```\n### Explanation..."
+      - "```\n<code>\n```"
+      - Raw code with no fences
+    """
     t = text.strip()
-    m = re.match(r"^```[\w+-]*\n(.*?)\n?```$", t, re.DOTALL)
-    return m.group(1) if m else t
+    # 1. Try to extract content from code fences anywhere in the text
+    m = re.search(r"```[\w+-]*\n(.*?)\n```", t, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # 2. No fences found — strip common preamble lines (model commentary before the code)
+    lines = t.splitlines()
+    # Drop leading lines that look like commentary (not code)
+    while lines and _is_commentary(lines[0]):
+        lines.pop(0)
+    # Drop trailing lines that look like commentary
+    while lines and _is_commentary(lines[-1]):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _is_commentary(line: str) -> bool:
+    """True if a line looks like model commentary rather than code."""
+    s = line.strip()
+    if not s:
+        return True
+    # Markdown headings, "Certainly!", "Here is...", "Below is...", "It appears..."
+    commentary_starts = (
+        "#", "certainly", "sure", "here is", "here's", "below is", "below are",
+        "it appears", "it seems", "the complete", "the file", "note:", "explanation",
+        "---",
+    )
+    return s.lower().startswith(commentary_starts)
 
 
 def validate_file(path: str, content: str) -> Optional[str]:
@@ -147,6 +178,18 @@ def validate_file(path: str, content: str) -> Optional[str]:
                 tmp_path = tmp.name
             try:
                 r = subprocess.run(["node", "--check", tmp_path], capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    return r.stderr.strip()[:500]
+            finally:
+                os.unlink(tmp_path)
+        elif ext in (".c", ".h") and shutil.which("gcc"):
+            with tempfile.NamedTemporaryFile("w", suffix=ext, delete=False, encoding="utf-8") as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            try:
+                r = subprocess.run([
+                    "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", tmp_path
+                ], capture_output=True, text=True, timeout=15)
                 if r.returncode != 0:
                     return r.stderr.strip()[:500]
             finally:
@@ -291,9 +334,20 @@ run_command: {plan.run_command}
     return complete_text(llm, [imports.SystemMessage(content=build_system_prompt(design)), human])
 
 
-def generate_and_fix(llm, fp, plan, req_ctx, design, written, existing=None, feedback="") -> tuple[str, Optional[str]]:
+def write_file_to_disk(project_id: str, relative_path: str, content: str) -> str:
+    """Persist the latest generated file immediately so intermediate generation is inspectable."""
+    project_dir = WORKSPACE_ROOT / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    abs_path = project_dir / relative_path.lstrip("/")
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(content, encoding="utf-8")
+    return str(abs_path)
+
+
+def generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id: str, existing=None, feedback="") -> tuple[str, Optional[str]]:
     """Generate one file, validate it, repair with the real error up to MAX_REPAIR_ATTEMPTS."""
     content = generate_one_file(llm, fp, plan, req_ctx, design, written, existing, feedback)
+    write_file_to_disk(project_id, fp.path, content)
     error = validate_file(fp.path, content)
     attempt = 0
     while error and attempt < MAX_REPAIR_ATTEMPTS:
@@ -304,6 +358,7 @@ def generate_and_fix(llm, fp, plan, req_ctx, design, written, existing=None, fee
             existing=content,
             feedback=f"Validation error: {error}\nReturn the complete corrected file.",
         )
+        write_file_to_disk(project_id, fp.path, content)
         error = validate_file(fp.path, content)
     return content, error
 
@@ -348,7 +403,7 @@ def Code_Agent(state: AgentState) -> dict:
             plan = make_plan(plan_llm, req_ctx, design)
             print(f"  [Code Agent] Plan: {[f.path for f in plan.files]}")
             for fp in order_files(plan.files):
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written)
+                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id)
                 written[fp.path] = content
                 meta[fp.path] = fp
                 if err:
@@ -378,7 +433,7 @@ def Code_Agent(state: AgentState) -> dict:
 
             for p in targets:
                 fp = meta.get(p) or FilePlan(path=p, purpose="")
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written,
+                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id,
                                                 existing=prev_files[p], feedback=feedback)
                 written[p] = content
                 if err:
@@ -386,7 +441,7 @@ def Code_Agent(state: AgentState) -> dict:
             for fp in new_files:
                 plan.files.append(fp)
                 meta[fp.path] = fp
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written)
+                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id)
                 written[fp.path] = content
                 if err:
                     errors[fp.path] = err

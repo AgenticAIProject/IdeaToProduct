@@ -1,13 +1,10 @@
 {
   "project_id": "proj_001",
-  "generated_at": "2026-10-10T08:54:08.133401",
+  "generated_at": "2026-10-12T10:39:44.901774+00:00",
   "files": [
-    "index.html",
-    "style.css",
-    "app.js",
-    "dataService.js",
-    "test.js",
-    "package.json",
-    "verification.test.js"
+    "main.c",
+    "input_parser.c",
+    "operation_executor.c",
+    "calculation_history.c"
   ]
 }

@@ -178,6 +178,8 @@ def main():
         "review_version":          0,
         "documentation":           {},
         "documentation_version":   0,
+        "release":                 {},
+        "release_version":         0,
         "current_stage":           "requirement",
         "workflow_status":         "running",
         "retry_count":             {},
