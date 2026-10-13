@@ -119,16 +119,6 @@ def _validate_test_file(name: str, content: str):
                     return r.stderr.strip()[:500]
             finally:
                 os.unlink(p)
-        elif name.endswith((".c", ".h")) and shutil.which("gcc"):
-            with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False, encoding="utf-8") as t:
-                t.write(content)
-                p = t.name
-            try:
-                r = subprocess.run(["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", p], capture_output=True, text=True, timeout=15)
-                if r.returncode != 0:
-                    return r.stderr.strip()[:500]
-            finally:
-                os.unlink(p)
     except SyntaxError as e:
         return f"SyntaxError line {e.lineno}: {e.msg}"
     return None

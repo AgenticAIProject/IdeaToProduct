@@ -11,13 +11,30 @@ from graph import graph
 from pprint import pprint
 
 def main():
-    print("========== INITIALIZING WORKFLOW ==========\n")
+    print("=" * 60)
+    print("         AI PRODUCT DEVELOPMENT WORKFLOW")
+    print("=" * 60)
     
+    # Prompt the user for the idea with a sensible default fallback
+    default_idea = "Build a calculator in c language."
+    user_idea = input(f"\nEnter your product idea (press Enter for default: '{default_idea}'):\n> ").strip()
+    if not user_idea:
+        user_idea = default_idea
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project_id = f"proj_{timestamp}"
+    thread_id = f"{project_id}_session"
+
+    print(f"\n[Project ID]: {project_id}")
+    print(f"[Product Idea]: {user_idea}\n")
+    print("Running LangGraph workflow...\n")
+
     # Initialize the starting state
     initial_state: AgentState = {
-        "project_id": "proj_001",
+        "project_id": project_id,
         "user_id": "user_001",
-        "idea": "Build a calculator in c language.",
+        "idea": user_idea,
         
         "clarification_questions": [],
         "user_answers": [],
@@ -41,6 +58,7 @@ def main():
         
         "documentation": {},
         "documentation_version": 0,
+        
         "release": {},
         "release_version": 0,
         
@@ -58,12 +76,9 @@ def main():
         "approval_status": "pending"
     }
 
-    print(f"Idea: {initial_state['idea']}")
-    print("\nRunning LangGraph workflow...\n")
-
-    # Configure the thread memory and recursion limit
+    # Configure thread memory and recursion limit (unique thread_id prevents checkpoint collisions)
     config = {
-        "configurable": {"thread_id": "project_001_session"},
+        "configurable": {"thread_id": thread_id},
         "recursion_limit": 30
     }
 
@@ -113,18 +128,38 @@ def main():
     print("WORKFLOW COMPLETE")
     print("="*50)
     
-    print("\nFinal Current Stage:", result.get("current_stage"))
-    print("Final Workflow Status:", result.get("workflow_status"))
-    print("Final Approval Status:", result.get("approval_status"))
-    
-    print("\n--- Generated Requirements ---")
-    pprint(result.get("requirements"))
-    
-    print("\n--- Generated Design ---")
-    pprint(result.get("design"))
-    
-    print("\n--- Final Review Results ---")
-    pprint(result.get("review"))
+    print("\n[Final Stage]:", result.get("current_stage"))
+    print("[Workflow Status]:", result.get("workflow_status"))
+    print("[Approval Status]:", result.get("approval_status"))
+
+    gen_path = result.get("generated_project_path") or (result.get("code") or {}).get("generated_project_path")
+    if gen_path:
+        print(f"\n📂 Generated Project Location: {gen_path}")
+        code_files = (result.get("code") or {}).get("files", [])
+        if code_files:
+            print("Generated Files:")
+            for f in code_files:
+                path_str = f.get("path") if isinstance(f, dict) else str(f)
+                print(f"  - {path_str}")
+
+    test_res = result.get("test_results") or {}
+    if test_res:
+        print("\n🧪 Test Summary:")
+        print(f"  Summary: {test_res.get('summary', 'N/A')}")
+        print(f"  Passed: {test_res.get('passed_tests', 0)}, Failed: {test_res.get('failed_tests', 0)}")
+
+    rev = result.get("review") or {}
+    if rev:
+        print("\n📋 Review Summary:")
+        print(f"  Approved: {rev.get('approved')}")
+        print(f"  Overall Score: {rev.get('overall_score')}/10")
+        if rev.get("summary"):
+            print(f"  Verdict: {rev.get('summary')}")
+
+    docs = result.get("documentation") or {}
+    if docs and docs.get("readme"):
+        readme_preview = docs["readme"][:300].strip()
+        print(f"\n📄 Documentation Generated (README Preview):\n{readme_preview}...\n")
 
 if __name__ == "__main__":
     main()

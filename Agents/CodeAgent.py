@@ -182,18 +182,6 @@ def validate_file(path: str, content: str) -> Optional[str]:
                     return r.stderr.strip()[:500]
             finally:
                 os.unlink(tmp_path)
-        elif ext in (".c", ".h") and shutil.which("gcc"):
-            with tempfile.NamedTemporaryFile("w", suffix=ext, delete=False, encoding="utf-8") as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            try:
-                r = subprocess.run([
-                    "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", tmp_path
-                ], capture_output=True, text=True, timeout=15)
-                if r.returncode != 0:
-                    return r.stderr.strip()[:500]
-            finally:
-                os.unlink(tmp_path)
     except SyntaxError as e:
         return f"SyntaxError line {e.lineno}: {e.msg}"
     except json.JSONDecodeError as e:
@@ -201,6 +189,40 @@ def validate_file(path: str, content: str) -> Optional[str]:
     except Exception as e:  # noqa: BLE001
         return f"Validation error: {e}"
     return None
+
+
+def validate_c_project(files: dict[str, str]) -> list[str]:
+    """Compile-check all C translation units together with their generated headers available."""
+    sources = [path for path in files if path.lower().endswith(".c")]
+    if not sources:
+        return []
+    if not shutil.which("gcc"):
+        return ["gcc is not installed; C project compile check was skipped."]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        include_dirs = {temp_dir}
+        for path, content in files.items():
+            normalized = os.path.normpath(path)
+            if os.path.isabs(normalized) or normalized == ".." or normalized.startswith(".." + os.sep):
+                return [f"Unsafe generated path in C project: {path}"]
+            full_path = os.path.join(temp_dir, normalized)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "w", encoding="utf-8") as generated_file:
+                generated_file.write(content)
+            if path.lower().endswith((".c", ".h")):
+                include_dirs.add(os.path.dirname(full_path))
+
+        command = ["gcc", "-std=c11", "-Wall", "-Wextra", "-fsyntax-only"]
+        for include_dir in sorted(include_dirs):
+            command.extend(["-I", include_dir])
+        command.extend(os.path.join(temp_dir, os.path.normpath(path)) for path in sources)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return ["gcc C project compile check timed out after 30 seconds."]
+        if result.returncode != 0:
+            return [result.stderr.strip()[:2000] or "gcc C project compile check failed."]
+    return []
 
 
 def check_cross_file(files: dict[str, str]) -> list[str]:
@@ -377,7 +399,8 @@ def Code_Agent(state: AgentState) -> dict:
 
     project_id = state.get("project_id")
     if not project_id:
-        raise ValueError("Code Agent requires 'project_id' in state.")
+        from datetime import datetime
+        project_id = f"proj_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     design = state.get("design", {})
     requirements = state.get("requirements", {})
@@ -458,6 +481,10 @@ def Code_Agent(state: AgentState) -> dict:
             "workflow_status": "failed",
             "retry_count": {**retry_count, "code": retry_count.get("code", 0) + 1},
         }
+
+    c_compile_errors = validate_c_project(written)
+    if c_compile_errors:
+        errors["C project compile check"] = "\n".join(c_compile_errors)
 
     cross = check_cross_file(written)
     notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]

@@ -101,6 +101,53 @@ Generate the complete project documentation package.
 
     documentation_payload: dict = response.model_dump()
 
+    # ---------------------------------------------------------
+    # Persist documentation files to the generated project folder
+    # ---------------------------------------------------------
+    from pathlib import Path
+
+    project_id = state.get("project_id") or "project"
+    generated_project_path = state.get("generated_project_path")
+    project_dir = Path(generated_project_path) if generated_project_path else None
+    if project_dir is None or not project_dir.exists():
+        project_dir = Path(__file__).resolve().parent.parent / "generated_projects" / project_id
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    written_doc_files: list[str] = []
+
+    if response.readme:
+        readme_path = project_dir / "README.md"
+        readme_path.write_text(response.readme, encoding="utf-8")
+        written_doc_files.append("README.md")
+
+    if response.api_reference:
+        api_path = project_dir / "API_REFERENCE.md"
+        api_path.write_text(response.api_reference, encoding="utf-8")
+        written_doc_files.append("API_REFERENCE.md")
+
+    if response.architecture_overview:
+        arch_path = project_dir / "ARCHITECTURE.md"
+        arch_path.write_text(response.architecture_overview, encoding="utf-8")
+        written_doc_files.append("ARCHITECTURE.md")
+
+    if response.user_guide:
+        user_guide_path = project_dir / "USER_GUIDE.md"
+        user_guide_path.write_text(response.user_guide, encoding="utf-8")
+        written_doc_files.append("USER_GUIDE.md")
+
+    if response.changelog:
+        changelog_path = project_dir / "CHANGELOG.md"
+        changelog_path.write_text(response.changelog, encoding="utf-8")
+        written_doc_files.append("CHANGELOG.md")
+
+    documentation_payload["files_written"] = written_doc_files
+    documentation_payload["project_dir"] = str(project_dir)
+
+    print(f"  [Documentation Agent] Wrote {len(written_doc_files)} documentation files to: {project_dir}")
+    for doc_name in written_doc_files:
+        print(f"    - {doc_name}")
+
     return {
         "documentation": documentation_payload,
         "documentation_version": state.get("documentation_version", 0) + 1,

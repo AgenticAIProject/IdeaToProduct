@@ -60,3 +60,7 @@ class AgentState(TypedDict):
 # skills
 # LLM calls 
 # number of tokens(input and output), context window, security, 
+# edges
+# skills
+# LLM calls 
+# number of tokens(input and output), context window, security, 

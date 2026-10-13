@@ -24,20 +24,39 @@ from pydantic import BaseModel, Field
 
 # ── Model configuration ──────────────────────────────────────────────────────
 # Agents that run on local Ollama (port 11434)
-OLLAMA_AGENTS = {"code", "test", "documentation"}
+# Code and Documentation generate the highest volume of tokens
+OLLAMA_AGENTS = {"code", "documentation"}
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
-# Agents that stay on OpenRouter
+# If set, also run test agent on local Ollama instead of OpenRouter Account 2
+if os.environ.get("TEST_ON_OLLAMA", "").lower() in ("true", "1", "yes"):
+    OLLAMA_AGENTS.add("test")
+
+# OpenRouter models. Use an explicit model instead of the dynamic openrouter/free
+# alias so structured-output requests are routed consistently.
+OPENROUTER_DEFAULT_MODEL = os.environ.get(
+    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
+)
 OPENROUTER_MODELS = {
-    "requirement": "openrouter/free",
-    "design":      "openrouter/free",
-    "review":      "openrouter/free",
+    "requirement": os.environ.get("REQUIREMENT_MODEL", OPENROUTER_DEFAULT_MODEL),
+    "design":      os.environ.get("DESIGN_MODEL", OPENROUTER_DEFAULT_MODEL),
+    "test":        os.environ.get("TEST_MODEL", OPENROUTER_DEFAULT_MODEL),
+    "review":      os.environ.get("REVIEW_MODEL", OPENROUTER_DEFAULT_MODEL),
 }
+
+# Account 2 handles QA & Governance (Test, Review)
+# Account 1 handles Upstream Planning (Requirement, Design)
+OPENROUTER_ACCOUNT_2_AGENTS = {"test", "review"}
 
 
 def get_llm(agent_type: str = "requirement", max_tokens: int = 2000):
-    """Return ChatOllama for code/test/documentation, ChatOpenRouter for the rest."""
+    """
+    Model routing:
+      - code, documentation: Local Ollama (qwen2.5-coder:7b)
+      - requirement, design: OpenRouter Account 1 (OPENROUTER_API_KEY)
+      - test, review:        OpenRouter Account 2 (OPENROUTER_API_KEY2)
+    """
     if agent_type in OLLAMA_AGENTS:
         model = OLLAMA_MODEL
         if agent_type == "code":
@@ -50,10 +69,26 @@ def get_llm(agent_type: str = "requirement", max_tokens: int = 2000):
             num_predict=max_tokens,
         )
     else:
-        model = OPENROUTER_MODELS.get(agent_type, "openai/gpt-4o-mini")
+        # Route to Account 2 for test & review, Account 1 for requirement & design
+        if agent_type in OPENROUTER_ACCOUNT_2_AGENTS:
+            api_key = (
+                os.environ.get("OPENROUTER_API_KEY2")
+                or os.environ.get("OPENROUTER_API_KEY_2")
+                or os.environ.get("OPENROUTER_API_KEY")
+            )
+        else:
+            api_key = (
+                os.environ.get("OPENROUTER_API_KEY1")
+                or os.environ.get("OPENROUTER_API_KEY_1")
+                or os.environ.get("OPENROUTER_API_KEY")
+            )
+
+        model = OPENROUTER_MODELS.get(agent_type, OPENROUTER_DEFAULT_MODEL)
+
         return ChatOpenRouter(
             model=model,
             max_tokens=max_tokens,
+            openrouter_api_key=api_key,
         )
 
 

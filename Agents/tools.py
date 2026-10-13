@@ -39,6 +39,8 @@ def repo_scaffold(project_id: str, files: list[dict]) -> dict:
 
     Returns a summary dict with the project path and list of written files.
     """
+    if not project_id:
+        project_id = f"proj_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     project_dir = WORKSPACE_ROOT / project_id
     if project_dir.exists():
         shutil.rmtree(project_dir)

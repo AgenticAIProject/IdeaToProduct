@@ -28,6 +28,7 @@ run_code_tests(files, test_files, test_command=None, timeout_seconds=30) -> dict
 
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -201,6 +202,8 @@ def _detect_framework(test_files: Dict[str, str]) -> str | None:
         fn_lower = filename.lower()
 
         # Polyglot test frameworks
+        if fn_lower.endswith(".c"):
+            return "c"
         if fn_lower.endswith("_test.go") or 'import "testing"' in content:
             return "go"
         if fn_lower.endswith("test.java") or "@Test" in content or "org.junit" in content:
@@ -239,6 +242,7 @@ def _build_run_cmd(
     has_requirements: bool,
     test_files: Dict[str, str],
     source_files: list[str] | None = None,
+    source_contents: Dict[str, str] | None = None,
 ) -> str:
     """
     Build the shell command executed *inside* the container.
@@ -271,13 +275,22 @@ def _build_run_cmd(
         elif framework == "c":
             project_sources = [
                 fn for fn in (source_files or [])
-                if fn.endswith(".c") and not fn.endswith("main.c")
+                if fn.lower().endswith(".c")
+                and not re.search(r"\bmain\s*\(", (source_contents or {}).get(fn, ""))
             ]
-            compile_sources = sorted(set(project_sources + [fn for fn in test_files.keys() if fn.endswith(".c")]))
-            if not compile_sources:
-                compile_sources = sorted(fn for fn in test_files.keys() if fn.endswith(".c"))
-            compile_list = " ".join(compile_sources)
-            parts.append(f"gcc -std=c11 -Wall -Wextra -Werror -I/app -o /tmp/test_binary {compile_list} && /tmp/test_binary")
+            test_sources = [fn for fn in test_files if fn.lower().endswith(".c")]
+            if not test_sources:
+                raise ValueError("C test suite must include a .c test harness.")
+            compile_sources = sorted(set(project_sources + test_sources))
+            compile_list = " ".join(shlex.quote(path) for path in compile_sources)
+            include_dirs = {"/app"}
+            include_dirs.update(
+                f"/app/{os.path.dirname(path)}"
+                for path in [*(source_files or []), *test_files.keys()]
+                if os.path.dirname(path)
+            )
+            include_flags = " ".join(f"-I {shlex.quote(path)}" for path in sorted(include_dirs))
+            parts.append(f"gcc -std=c11 -Wall -Wextra {include_flags} -o /tmp/test_binary {compile_list} && /tmp/test_binary")
         else:
             js_files = [fn for fn in test_files.keys() if fn.endswith((".js", ".mjs", ".cjs"))]
             if js_files:
@@ -546,7 +559,16 @@ def run_code_tests(
                     key for key in (files if isinstance(files, dict) else {})
                 )
                 source_paths = sorted(set(p for p in source_paths if p))
-                run_cmd = _build_run_cmd(test_command, has_requirements, test_files, source_paths)
+                source_contents = {
+                    entry.get("path"): entry.get("content", "")
+                    for entry in (files if isinstance(files, list) else [])
+                    if isinstance(entry, dict) and entry.get("path")
+                }
+                if isinstance(files, dict):
+                    source_contents.update(files)
+                run_cmd = _build_run_cmd(
+                    test_command, has_requirements, test_files, source_paths, source_contents
+                )
             except ValueError as exc:
                 return _early("setup_error", "Test framework could not be determined", [str(exc)])
             network = False
