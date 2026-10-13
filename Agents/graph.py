@@ -58,11 +58,11 @@ def review_router(state: AgentState):
     if state.get("approval_status") == "approved":
         return "approved"
 
-    # Circuit breaker: after 3 rework rounds stop. Do NOT document code that never passed review.
+    # After 3 rework rounds, preserve the artifacts and route them to Documentation.
     retry_count = state.get("retry_count", {})
     code_retries = retry_count.get("code", 0)
     if code_retries >= 3:
-        print("  [Review Router] Max rework retries (3) reached without approval. Stopping.")
+        print("  [Review Router] Max rework retries (3) reached without approval. Routing to documentation.")
         return "give_up"
 
     return "rejected"
@@ -111,7 +111,7 @@ builder.add_conditional_edges(
     {
         "approved": "documentation",
         "rejected": "code",
-        "give_up": END
+        "give_up": "documentation"
     }
 )
 

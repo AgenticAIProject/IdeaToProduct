@@ -29,23 +29,6 @@ def Documentation_Agent(state: AgentState) -> dict:
     """
     print("\nDocumentation Agent synthesizing project documentation...")
 
-    # Governance check: verify if the project was rejected in review
-    approval_status = state.get("approval_status", "approved")
-    if approval_status == "rejected":
-        print("Warning: Documentation Agent invoked on a rejected project.")
-        return {
-            "documentation": {
-                "readme": "# Project Status: Review Rejected\n\nDocumentation generation blocked due to failed review.",
-                "api_reference": "",
-                "architecture_overview": "",
-                "user_guide": "",
-                "changelog": ""
-            },
-            "documentation_version": state.get("documentation_version", 0) + 1,
-            "current_stage": "documentation",
-            "workflow_status": "blocked_by_governance"
-        }
-
     idea = state.get("idea", "")
     requirements = state.get("requirements", {})
     design = state.get("design", {})

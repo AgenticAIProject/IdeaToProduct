@@ -1,27 +1,58 @@
 /* ─────────────────────────────────────────────────
-  IdeaToProduct — app.js
-  Orchestrates: landing → pipeline → studio
-  Real API: /api/start, /api/status, /api/answer
-  Mock data: window.MockData (mock-data.js)
-  ───────────────────────────────────────────────── */
+   IdeaToProduct — app.js
+   E2E Antigrav Editorial Frontend
+   ─────────────────────────────────────────────────
+   API Contract (preserved from server.py):
+   POST /api/start        { idea, project_id? }  → { session_id, project_id, status }
+   GET  /api/status/:sid                          → { session_id, project_id, is_running, status, stage, error, result }
+   POST /api/answer        { session_id, answers[] } → { status:"resumed", session_id }
+
+   Status values: running | clarification | done | error
+   Pipeline stages: requirement → design → code → test → review → documentation (→ release)
+   ───────────────────────────────────────────────── */
 'use strict';
 
-/* ── Config ──────────────────────────────────── */
-const API = (window.location.origin && window.location.origin.startsWith('http')) ? window.location.origin : 'http://localhost:8000';
+/* ── Config ──────────────────────────────── */
+const API = (window.location.origin && window.location.origin.startsWith('http'))
+  ? window.location.origin
+  : 'http://localhost:8000';
 
-/* ── State ───────────────────────────────────── */
+/* ── State ───────────────────────────────── */
 const State = {
   sessionId: null,
   projectId: null,
   projectName: 'Untitled',
+  githubRepo: '',
   currentView: 'overview',
   pollTimer: null,
-  isLive: false,    // true = real backend running
-  pipelineData: null,     // from real API result
+  isLive: false,
+  pipelineData: null,
+  activityLog: [],
+  startTime: null,
 };
 
-/* ── DOM refs ────────────────────────────────── */
+/* ── DOM refs ────────────────────────────── */
 const $ = id => document.getElementById(id);
+
+/* ── Stage definitions (matches graph.py nodes) ── */
+const STAGE_DEFS = [
+  { id: 'requirement',    label: 'Requirements',  desc: 'Analyzes the idea, extracts scope, generates user stories and functional requirements.' },
+  { id: 'design',         label: 'Design',        desc: 'Maps architecture from requirements, defines components and API contracts.' },
+  { id: 'code',           label: 'Code',           desc: 'Generates repository scaffold, source files, and dependencies.' },
+  { id: 'test',           label: 'Tests',          desc: 'Runs test suite against generated code, reports pass/fail.' },
+  { id: 'review',         label: 'Review',         desc: 'Evaluates quality, consistency, and identifies findings.' },
+  { id: 'documentation',  label: 'Docs',           desc: 'Generates README, API reference, and setup documentation.' },
+];
+
+/* ── Model configuration (read from backend imports.py) ── */
+const MODEL_CONFIG = {
+  requirement:    { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Requirement analysis & scope extraction' },
+  design:         { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Architecture & component design' },
+  code:           { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Code generation & repository scaffold' },
+  test:           { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Test generation & execution' },
+  review:         { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Quality review & approval gate' },
+  documentation:  { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Documentation & README generation' },
+};
 
 /* ═════════════════════════════════════════════════
    1. BOOT
@@ -29,14 +60,13 @@ const $ = id => document.getElementById(id);
 document.addEventListener('DOMContentLoaded', () => {
   navScrollEffect();
   wireCharCount();
-  animateLandingIn();
-  observeHiwCards();
-  wireGridParallax();
-  injectTracePanelDOM();
+  wireModelConfigButtons();
+  wireMobileMenu();
 });
 
 function navScrollEffect() {
   const nav = $('mainNav');
+  if (!nav) return;
   window.addEventListener('scroll', () => {
     nav.classList.toggle('scrolled', window.scrollY > 30);
   }, { passive: true });
@@ -46,100 +76,41 @@ function wireCharCount() {
   const ta = $('ideaInput');
   const cc = $('charCount');
   if (!ta || !cc) return;
-  ta.addEventListener('input', () => { cc.textContent = ta.value.length; });
-}
-
-function animateLandingIn() {
-  const left = $('landingLeft');
-  const right = $('landingRight');
-  [left, right].forEach((el, i) => {
-    if (!el) return;
-    el.style.opacity = '0';
-    el.style.transform = 'translateY(20px)';
-    setTimeout(() => {
-      el.style.transition = 'opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1)';
-      el.style.opacity = '1';
-      el.style.transform = 'translateY(0)';
-    }, 100 + i * 80);
+  ta.addEventListener('input', () => {
+    cc.textContent = ta.value.length;
   });
 }
 
-function observeHiwCards() {
-  const cards = document.querySelectorAll('.hiw-card');
-  const obs = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (!e.isIntersecting) return;
-      const i = Array.from(cards).indexOf(e.target);
-      e.target.style.transition = `opacity 0.6s ${i * 50}ms, transform 0.6s ${i * 50}ms`;
-      e.target.style.opacity = '1';
-      e.target.style.transform = 'translateY(0)';
-      obs.unobserve(e.target);
+function wireModelConfigButtons() {
+  const btn1 = $('navModelCfgBtn');
+  const btn2 = $('navModelCfgBtn2');
+  if (btn1) btn1.addEventListener('click', openModelConfig);
+  if (btn2) btn2.addEventListener('click', openModelConfig);
+}
+
+function wireMobileMenu() {
+  const toggle = $('mobileMenuToggle');
+  const sidebar = $('studioSidebar');
+  const overlay = $('mobileSidebarOverlay');
+  if (!toggle) return;
+
+  toggle.addEventListener('click', () => {
+    const isOpen = sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', !isOpen);
+    overlay.classList.toggle('hidden', isOpen);
+  });
+
+  if (overlay) {
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      overlay.classList.add('hidden');
     });
-  }, { threshold: 0.1 });
-  cards.forEach(c => {
-    c.style.opacity = '0';
-    c.style.transform = 'translateY(16px)';
-    obs.observe(c);
-  });
-}
-
-/* ═════════════════════════════════════════════════
-   1b. GRID MOUSE PARALLAX
-═════════════════════════════════════════════════ */
-function wireGridParallax() {
-  const grid = document.querySelector('.landing-bg-grid');
-  if (!grid) return;
-  const landing = document.querySelector('.screen-landing');
-  if (!landing) return;
-  landing.addEventListener('mousemove', e => {
-    const rect = landing.getBoundingClientRect();
-    const cx = (e.clientX - rect.left) / rect.width;
-    const cy = (e.clientY - rect.top) / rect.height;
-    const ox = (cx - 0.5) * 4; // ±2px
-    const oy = (cy - 0.5) * 4;
-    grid.style.backgroundPosition = `${ox}px ${oy}px`;
-  }, { passive: true });
-  landing.addEventListener('mouseleave', () => {
-    grid.style.backgroundPosition = '0 0';
-  });
-}
-
-/* ═════════════════════════════════════════════════
-   1c. IDEA INTERPRETATION STATE MACHINE
-═════════════════════════════════════════════════ */
-const IDEA_TYPES = [
-  { kw: ['habit', 'streak', 'check', 'routine'], type: 'Habit app', workflow: 'Daily check-off & streaks', features: '4–6 detected' },
-  { kw: ['expense', 'split', 'bill', 'money', 'pay'], type: 'Finance tool', workflow: 'Expense tracking & splits', features: '3–5 detected' },
-  { kw: ['note', 'markdown', 'document', 'wiki', 'kb'], type: 'Knowledge base', workflow: 'Note creation & search', features: '4–7 detected' },
-  { kw: ['task', 'todo', 'project', 'kanban'], type: 'Task manager', workflow: 'Task creation & assignment', features: '5–8 detected' },
-  { kw: ['chat', 'message', 'team', 'collab'], type: 'Collaboration', workflow: 'Real-time messaging', features: '6–10 detected' },
-  { kw: ['shop', 'store', 'cart', 'product', 'buy'], type: 'E-commerce', workflow: 'Product listing & checkout', features: '8–12 detected' },
-];
-
-let interpretTimer = null;
-function interpretIdea(text) {
-  const low = text.toLowerCase();
-  const match = IDEA_TYPES.find(t => t.kw.some(k => low.includes(k)));
-  const panel = $('icInterpret');
-  if (!panel) return;
-
-  if (text.length < 20) {
-    panel.style.display = 'none';
-    return;
   }
-
-  clearTimeout(interpretTimer);
-  interpretTimer = setTimeout(() => {
-    const type = match?.type || 'Custom app';
-    const workflow = match?.workflow || 'Custom workflow';
-    const features = match?.features || '3–5 detected';
-    $('iciType').textContent = type;
-    $('iciWorkflow').textContent = workflow;
-    $('iciFeatures').textContent = features;
-    panel.style.display = 'block';
-  }, 600);
 }
 
+/* ═════════════════════════════════════════════════
+   2. IDEA INPUT
+═════════════════════════════════════════════════ */
 window.fillIdea = function (btn) {
   const ta = $('ideaInput');
   const cc = $('charCount');
@@ -175,19 +146,23 @@ window.launchPipeline = async function () {
     State.projectId = data.project_id;
     State.projectName = deriveProjectName(idea);
     State.isLive = true;
+    State.pipelineData = null;
+    State.activityLog = [];
+    State.startTime = Date.now();
+
+    addActivity('System', 'Pipeline started', `Session ${data.session_id.slice(0, 8)}…`);
 
     enterStudio(State.projectName, 'running');
     startPolling();
 
   } catch (err) {
     if (btn) btn.disabled = false;
-    if (label) label.textContent = 'Start project';
+    if (label) label.textContent = 'Start building';
     alert('Could not connect to pipeline: ' + err.message);
   }
 };
 
 function deriveProjectName(idea) {
-  // Take first 3-4 words as project name
   const words = idea.split(' ').slice(0, 4).join(' ');
   return words.length > 30 ? words.slice(0, 30) + '…' : words;
 }
@@ -197,23 +172,30 @@ function deriveProjectName(idea) {
 ═════════════════════════════════════════════════ */
 function enterStudio(name, status) {
   // Switch nav
-  $('navLanding').classList.add('hidden');
-  $('navStudio').classList.remove('hidden');
+  $('navLanding')?.classList.add('hidden');
+  $('navStudio')?.classList.remove('hidden');
   $('studioProjectName').textContent = name;
+  $('mobileMenuToggle')?.classList.remove('hidden');
   setNavPipelineStatus(status);
 
   // Show studio, hide landing
-  $('screenLanding').classList.add('hidden');
-  $('screenStudio').classList.remove('hidden');
+  $('screenLanding')?.classList.add('hidden');
+  $('screenStudio')?.classList.remove('hidden');
 
   // Set up sidebar
   $('sbProjName').textContent = name;
   setSbStatus(status);
 
-  // Load overview
-  renderOverview(State.isLive ? null : MockData);
-  buildPipelineStages(State.isLive ? [] : MockData.pipeline);
-  buildActivityFeed(State.isLive ? [] : MockData.activity);
+  // Build sidebar stages and empty overview
+  if (State.isLive) {
+    buildPipelineStages([]);
+    buildActivityFeed([]);
+    renderOverview(null);
+  } else {
+    buildPipelineStages(MockData.pipeline);
+    buildActivityFeed(MockData.activity);
+    renderOverview(MockData);
+  }
 
   switchView('overview');
   window.scrollTo(0, 0);
@@ -223,16 +205,24 @@ window.exitStudio = function () {
   clearInterval(State.pollTimer);
   State.sessionId = null;
   State.isLive = false;
+  State.pipelineData = null;
 
-  $('navStudio').classList.add('hidden');
-  $('navLanding').classList.remove('hidden');
-  $('screenStudio').classList.add('hidden');
-  $('screenLanding').classList.remove('hidden');
+  $('navStudio')?.classList.add('hidden');
+  $('navLanding')?.classList.remove('hidden');
+  $('screenStudio')?.classList.add('hidden');
+  $('screenLanding')?.classList.remove('hidden');
+  $('mobileMenuToggle')?.classList.add('hidden');
 
   const btn = $('launchBtn');
   const label = $('launchBtnLabel');
   if (btn) btn.disabled = false;
-  if (label) label.textContent = 'Start project';
+  if (label) label.textContent = 'Start building';
+
+  // Clear rendered flags so views re-render on next entry
+  document.querySelectorAll('.studio-view').forEach(el => {
+    delete el.dataset.rendered;
+    if (el.id !== 'view-overview') el.innerHTML = '';
+  });
 };
 
 /* ═════════════════════════════════════════════════
@@ -241,6 +231,7 @@ window.exitStudio = function () {
 function startPolling() {
   clearInterval(State.pollTimer);
   State.pollTimer = setInterval(pollStatus, 2500);
+  pollStatus(); // immediate first poll
 }
 
 async function pollStatus() {
@@ -250,44 +241,92 @@ async function pollStatus() {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     handlePollResult(data);
-  } catch { /* transient — keep polling */ }
+  } catch (e) { /* transient — keep polling */ }
 }
 
+
 function handlePollResult(data) {
+  // Render any real outputs that are already available,
+  // even while the pipeline is still running.
+  const result = data.result;
+
+  if (result && typeof result === 'object') {
+    State.pipelineData = result;
+    populateLiveViews(result);
+  }
+
+  // Pipeline is still running: keep polling.
   if (data.is_running) {
-    // still running — update active stage from stage field when available
+    const stage = data.stage || 'requirements';
+    updateLiveStage(stage);
+    setNavPipelineStatus('running');
+    setSbStatus('running');
     return;
   }
+
+  // Pipeline stopped: stop polling.
   clearInterval(State.pollTimer);
 
   if (data.status === 'error') {
     showPipelineError(data.error || 'Unknown error.');
+    addActivity('System', 'Error', data.error || 'Pipeline stopped');
     return;
   }
 
   if (data.status === 'clarification') {
-    showClarifyOverlay(data.result?.clarification_questions || []);
+    addActivity(
+      'Requirement Agent',
+      'Clarification needed',
+      'Waiting for user input'
+    );
+    setNavPipelineStatus('paused');
+    setSbStatus('paused');
+    showClarifyOverlay(
+      data.result?.clarification_questions || []
+    );
     return;
   }
 
-  // Done
+  // Pipeline finished successfully.
   State.pipelineData = data.result;
   completePipeline(data.result);
+}
+
+
+function updateLiveStage(stage) {
+  const idx = STAGE_DEFS.findIndex(s => s.id === stage || s.id === stage.replace(/s$/, ''));
+  if (idx < 0) return;
+
+  STAGE_DEFS.forEach((def, i) => {
+    const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
+    if (!el) return;
+    el.classList.remove('active', 'done');
+    if (i < idx) el.classList.add('done');
+    else if (i === idx) el.classList.add('active');
+  });
 }
 
 function completePipeline(result) {
   setNavPipelineStatus('done');
   setSbStatus('done');
+  addActivity('System', 'Pipeline complete', 'All stages finished');
 
-  // Update sidebar stages to all done
   if (result) {
     const stage = result.current_stage || 'documentation';
     updateSidebarStages(stage, result);
     populateLiveViews(result);
+
+    // Re-render overview with completion info
+    renderOverview(result);
   }
 }
 
 function populateLiveViews(result) {
+  // Clear rendered flags to force re-render with real data
+  document.querySelectorAll('.studio-view').forEach(el => {
+    delete el.dataset.rendered;
+  });
+
   if (result.requirements && Object.keys(result.requirements).length)
     renderRequirementsView(result.requirements);
   if (result.design && Object.keys(result.design).length)
@@ -314,20 +353,21 @@ function getQuestionPresetOptions(qText) {
     return ["Email & Password", "Google / Social OAuth", "JWT Token Auth", "Passwordless / Magic Link", "RBAC Permissions"];
   }
   if (t.includes('ui') || t.includes('frontend') || t.includes('design') || t.includes('theme') || t.includes('style')) {
-    return ["Modern Dark Theme", "Sleek Minimalist", "Glassmorphism & Micro-animations", "Mobile Responsive", "High Contrast"];
+    return ["Modern Dark Theme", "Sleek Minimalist", "Mobile Responsive", "High Contrast"];
   }
   if (t.includes('platform') || t.includes('deploy') || t.includes('target') || t.includes('device')) {
-    return ["Web Application", "Mobile (iOS / Android)", "Desktop App", "CLI Tool", "Cloud / Docker Container"];
+    return ["Web Application", "Mobile (iOS / Android)", "Desktop App", "CLI Tool", "Cloud / Docker"];
   }
   if (t.includes('api') || t.includes('backend') || t.includes('architecture') || t.includes('protocol')) {
-    return ["RESTful API", "GraphQL API", "WebSocket Realtime", "Serverless Functions", "Modular Monolith"];
+    return ["RESTful API", "GraphQL API", "WebSocket Realtime", "Serverless Functions"];
   }
-  return ["Standard Best Practice", "Minimal MVP Approach", "Production & Scalable", "Strict Security First", "Fast Prototyping"];
+  return ["Standard Best Practice", "Minimal MVP", "Production & Scalable", "Security First"];
 }
 
 function showClarifyOverlay(questions) {
   const overlay = $('clarifyOverlay');
   const cont = $('cmQuestions');
+  if (!overlay || !cont) return;
   cont.innerHTML = '';
 
   questions.forEach((q, i) => {
@@ -338,7 +378,7 @@ function showClarifyOverlay(questions) {
     div.className = 'cq-item';
     div.dataset.cqIndex = i;
 
-    let optionsHtml = presets.map((opt, optIdx) => `
+    let optionsHtml = presets.map((opt) => `
       <button type="button" class="cq-chip" data-val="${escHtml(opt)}" onclick="toggleCqChip(this)">
         <svg class="cq-chip-check" width="12" height="12" viewBox="0 0 12 12" fill="none">
           <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -352,19 +392,19 @@ function showClarifyOverlay(questions) {
         <span class="cq-num">${String(i + 1).padStart(2, '0')}</span>
         <label class="cq-label" for="cq-${i}">${escHtml(qText)}</label>
       </div>
-      <div class="cq-subtitle">Select multiple options below or type custom details:</div>
+      <div class="cq-subtitle">Select options or type custom details:</div>
       <div class="cq-chips-container" id="cq-chips-${i}">
         ${optionsHtml}
       </div>
       <div class="cq-custom-chip-row">
         <input type="text" class="cq-custom-chip-input" id="cq-custom-chip-in-${i}"
-          placeholder="+ Add custom option chip…"
+          placeholder="+ Add custom option…"
           onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomCqChip(${i});}" />
         <button type="button" class="cq-add-chip-btn" onclick="addCustomCqChip(${i})">+ Add</button>
       </div>
       <div class="cq-input-wrapper">
         <textarea id="cq-${i}" class="cq-textarea" rows="2"
-          placeholder="Custom details / additional context (optional)…"></textarea>
+          placeholder="Additional context (optional)…"></textarea>
       </div>
     `;
     cont.appendChild(div);
@@ -385,7 +425,7 @@ window.addCustomCqChip = function (index) {
   const chipsCont = $(`cq-chips-${index}`);
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'cq-chip selected custom-added';
+  btn.className = 'cq-chip selected';
   btn.dataset.val = val;
   btn.setAttribute('onclick', 'toggleCqChip(this)');
   btn.innerHTML = `
@@ -403,7 +443,7 @@ window.submitClarification = async function () {
   const answers = [];
   let valid = true;
 
-  items.forEach((item, i) => {
+  items.forEach((item) => {
     const selectedChips = Array.from(item.querySelectorAll('.cq-chip.selected')).map(c => c.dataset.val);
     const textarea = item.querySelector('.cq-textarea');
     const customText = textarea ? textarea.value.trim() : '';
@@ -428,7 +468,8 @@ window.submitClarification = async function () {
 
   if (!valid) return;
 
-  $('clarifyOverlay').classList.add('hidden');
+  $('clarifyOverlay')?.classList.add('hidden');
+  addActivity('User', 'Answered clarification', `${answers.length} response(s) submitted`);
 
   try {
     const res = await fetch(`${API}/api/answer`, {
@@ -437,6 +478,9 @@ window.submitClarification = async function () {
       body: JSON.stringify({ session_id: State.sessionId, answers }),
     });
     if (!res.ok) throw new Error(await res.text());
+
+    setNavPipelineStatus('running');
+    setSbStatus('running');
     startPolling();
   } catch (err) {
     showPipelineError(err.message);
@@ -444,14 +488,22 @@ window.submitClarification = async function () {
 };
 
 window.skipClarification = async function () {
-  $('clarifyOverlay').classList.add('hidden');
+  $('clarifyOverlay')?.classList.add('hidden');
+  addActivity('User', 'Skipped clarification', 'Using standard defaults');
+
   try {
     const res = await fetch(`${API}/api/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: State.sessionId, answers: ["skip (proceed with standard architectural defaults)"] }),
+      body: JSON.stringify({
+        session_id: State.sessionId,
+        answers: ["skip (proceed with standard architectural defaults)"]
+      }),
     });
     if (!res.ok) throw new Error(await res.text());
+
+    setNavPipelineStatus('running');
+    setSbStatus('running');
     startPolling();
   } catch (err) {
     showPipelineError(err.message);
@@ -463,13 +515,16 @@ window.skipClarification = async function () {
 ═════════════════════════════════════════════════ */
 function setNavPipelineStatus(status) {
   const label = $('navPipelineLabel');
-  const dot = $('navStudio')?.querySelector('.pill-dot');
-  if (label) label.textContent = { running: 'Running', done: 'Complete', error: 'Error' }[status] || 'Initializing';
-  if (dot) {
-    dot.style.background = status === 'done' ? 'var(--green)'
-      : status === 'error' ? 'var(--red)'
-        : 'var(--green)';
-    dot.style.animation = status === 'running' ? 'blink 2s infinite' : 'none';
+  const indicator = $('navStatusIndicator');
+  const statusMap = {
+    running: 'Running',
+    done: 'Complete',
+    error: 'Error',
+    paused: 'Needs input',
+  };
+  if (label) label.textContent = statusMap[status] || 'Initializing';
+  if (indicator) {
+    indicator.className = 'status-indicator ' + status;
   }
 }
 
@@ -477,22 +532,19 @@ function setSbStatus(status) {
   const dot = $('sbStatusDot');
   const label = $('sbStatusLabel');
   if (!dot || !label) return;
-  dot.className = 'status-dot ' + status;
-  label.textContent = { running: 'Building', done: 'Complete', error: 'Error' }[status] || 'Initializing';
+  const statusMap = {
+    running: 'Building',
+    done: 'Complete',
+    error: 'Error',
+    paused: 'Needs input',
+  };
+  dot.className = 'status-indicator ' + status;
+  label.textContent = statusMap[status] || 'Initializing';
 }
 
 /* ═════════════════════════════════════════════════
    8. SIDEBAR PIPELINE STAGES
 ═════════════════════════════════════════════════ */
-const STAGE_DEFS = [
-  { id: 'requirement', label: 'Requirements' },
-  { id: 'design', label: 'Design' },
-  { id: 'code', label: 'Code' },
-  { id: 'test', label: 'Tests' },
-  { id: 'review', label: 'Review' },
-  { id: 'documentation', label: 'Docs' },
-];
-
 function buildPipelineStages(pipelineArr) {
   const cont = $('sbPipelineStages');
   if (!cont) return;
@@ -504,16 +556,24 @@ function buildPipelineStages(pipelineArr) {
   STAGE_DEFS.forEach(def => {
     const st = statusMap[def.id] || 'queued';
     const btn = document.createElement('button');
-    btn.className = 'sb-stage-item ' + (st === 'running' ? 'active' : st === 'done' ? 'done' : '');
+    btn.className = 'sb-stage-item' +
+      (st === 'running' ? ' active' : '') +
+      (st === 'done' ? ' done' : '');
     btn.dataset.stage = def.id;
+    btn.type = 'button';
     btn.onclick = () => switchView(def.id);
-    btn.innerHTML = `<span class="sb-stage-dot"></span>${def.label}`;
+    btn.innerHTML = `<span class="sb-stage-dot"></span>${escHtml(def.label)}`;
     cont.appendChild(btn);
   });
 }
 
 function updateSidebarStages(lastStage, result) {
-  const idx = STAGE_DEFS.findIndex(s => s.id === lastStage);
+  // Map stage names — backend uses "requirements" but stage id is "requirement"
+  let mappedStage = lastStage;
+  if (lastStage === 'requirements') mappedStage = 'requirement';
+
+  const idx = STAGE_DEFS.findIndex(s => s.id === mappedStage);
+
   STAGE_DEFS.forEach((def, i) => {
     const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
     if (!el) return;
@@ -525,6 +585,13 @@ function updateSidebarStages(lastStage, result) {
 /* ═════════════════════════════════════════════════
    9. ACTIVITY FEED
 ═════════════════════════════════════════════════ */
+function addActivity(agent, event, detail) {
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  State.activityLog.unshift({ time, agent, event, detail });
+  buildActivityFeed(State.activityLog.slice().reverse());
+}
+
 function buildActivityFeed(events) {
   const feed = $('sbActivityFeed');
   const count = $('sbActivityCount');
@@ -552,6 +619,10 @@ function buildActivityFeed(events) {
 window.switchView = function (viewId) {
   State.currentView = viewId;
 
+  // Close mobile sidebar
+  $('studioSidebar')?.classList.remove('open');
+  $('mobileSidebarOverlay')?.classList.add('hidden');
+
   // Update sidebar highlight
   document.querySelectorAll('.sb-item, .sb-stage-item').forEach(el => {
     const matches = el.dataset.view === viewId || el.dataset.stage === viewId;
@@ -563,7 +634,6 @@ window.switchView = function (viewId) {
     el.classList.toggle('hidden', el.id !== 'view-' + viewId);
   });
 
-  // Render view if not yet populated
   renderViewIfNeeded(viewId);
 };
 
@@ -571,21 +641,98 @@ function renderViewIfNeeded(viewId) {
   const el = $('view-' + viewId);
   if (!el || el.dataset.rendered) return;
 
-  // Use real data if available, fall back to mock
   const d = State.pipelineData;
+  const mock = window.MockData || {};
 
   switch (viewId) {
-    case 'overview': renderOverview(d ? { ...MockData, pipelineData: d } : MockData); break;
-    case 'requirement': renderRequirementsView(d?.requirements || MockData.requirements); break;
-    case 'design': renderDesignView(d?.design || MockData.design); break;
-    case 'code': renderCodeView(d?.code || MockData.code); break;
-    case 'test': renderTestsView(d?.test_results || MockData.tests); break;
-    case 'review': renderReviewView(d?.review || MockData.review, d?.approval_status || MockData.review.approval_status); break;
-    case 'documentation': renderDocsView(d?.documentation || MockData.documentation); break;
-    case 'artifacts': renderArtifactsView(MockData.artifacts); break;
-    case 'memory': renderMemoryView(MockData.memory); break;
+    case 'overview':
+      renderOverview(d || null);
+      break;
+    case 'requirement':
+      if (d?.requirements && Object.keys(d.requirements).length) {
+        renderRequirementsView(d.requirements);
+      } else if (!State.isLive && mock.requirements) {
+        renderRequirementsView(mock.requirements);
+      } else {
+        renderEmptyView(el, 'Requirements', 'Requirements will appear once the requirement agent completes.');
+      }
+      break;
+    case 'design':
+      if (d?.design && Object.keys(d.design).length) {
+        renderDesignView(d.design);
+      } else if (!State.isLive && mock.design) {
+        renderDesignView(mock.design);
+      } else {
+        renderEmptyView(el, 'Design', 'Architecture and component design will appear once the design agent completes.');
+      }
+      break;
+    case 'code':
+      if (d?.code && Object.keys(d.code).length) {
+        renderCodeView(d.code);
+      } else if (!State.isLive && mock.code) {
+        renderCodeView(mock.code);
+      } else {
+        renderEmptyView(el, 'Code', 'Generated repository will appear once the code agent completes.');
+      }
+      break;
+    case 'test':
+      if (d?.test_results && Object.keys(d.test_results).length) {
+        renderTestsView(d.test_results);
+      } else if (!State.isLive && mock.tests) {
+        renderTestsView(mock.tests);
+      } else {
+        renderEmptyView(el, 'Tests', 'Test results will appear once the test agent completes.');
+      }
+      break;
+    case 'review':
+      if (d?.review && Object.keys(d.review).length) {
+        renderReviewView(d.review, d.approval_status);
+      } else if (!State.isLive && mock.review) {
+        renderReviewView(mock.review, mock.review.approval_status);
+      } else {
+        renderEmptyView(el, 'Review', 'Quality review will appear once the review agent completes.');
+      }
+      break;
+    case 'documentation':
+      if (d?.documentation && Object.keys(d.documentation).length) {
+        renderDocsView(d.documentation);
+      } else if (!State.isLive && mock.documentation) {
+        renderDocsView(mock.documentation);
+      } else {
+        renderEmptyView(el, 'Documentation', 'Documentation will appear once the documentation agent completes.');
+      }
+      break;
+    case 'artifacts':
+      if (d) {
+        renderArtifactsViewLive(d);
+      } else if (!State.isLive && mock.artifacts) {
+        renderArtifactsView(mock.artifacts);
+      } else {
+        renderEmptyView(el, 'Artifacts', 'Artifacts will appear as the pipeline produces outputs.');
+      }
+      break;
+    case 'models':
+        renderModelsView();
+        break;
+      case 'github':
+        renderGitHubView();
+        break;
   }
   el.dataset.rendered = '1';
+}
+
+function renderEmptyView(el, title, message) {
+  el.innerHTML = `
+    <div class="view-hd">
+      <div class="view-breadcrumb">Pipeline</div>
+      <div class="view-title">${escHtml(title)}</div>
+    </div>
+    <div class="empty-state">
+      <div class="empty-state-icon">○</div>
+      <div class="empty-state-title">No data yet</div>
+      <div class="empty-state-sub">${escHtml(message)}</div>
+    </div>
+  `;
 }
 
 /* ═════════════════════════════════════════════════
@@ -596,26 +743,67 @@ function renderViewIfNeeded(viewId) {
 function renderOverview(data) {
   const el = $('view-overview');
   if (!el) return;
-  const proj = data?.project || MockData.project;
-  const pipeline = MockData.pipeline;
+
+  const mock = window.MockData || {};
+  const isComplete = State.isLive && State.pipelineData;
+  const elapsed = State.startTime ? formatElapsed(Date.now() - State.startTime) : '—';
+
+  // Determine pipeline stages display
+  let pipeline;
+  if (State.isLive && State.pipelineData) {
+    // Build from real result
+    const result = State.pipelineData;
+    const lastStageId = (result.current_stage || 'documentation').replace(/s$/, '');
+    const lastIdx = STAGE_DEFS.findIndex(s => s.id === lastStageId);
+    pipeline = STAGE_DEFS.map((def, i) => ({
+      ...def,
+      status: i <= (lastIdx >= 0 ? lastIdx : STAGE_DEFS.length - 1) ? 'done' : 'queued',
+    }));
+  } else if (!State.isLive && mock.pipeline) {
+    pipeline = mock.pipeline.map(p => ({ ...p }));
+  } else {
+    pipeline = STAGE_DEFS.map(def => ({ ...def, status: 'queued' }));
+  }
+
+  // Current stage label
+  let currentStageName = '—';
+  if (State.isLive && !State.pipelineData) {
+    currentStageName = 'Processing…';
+  } else if (State.pipelineData) {
+    const cs = State.pipelineData.current_stage || 'documentation';
+    const def = STAGE_DEFS.find(s => s.id === cs || s.id === cs.replace(/s$/, ''));
+    currentStageName = def ? def.label + ' (Complete)' : cs;
+  } else if (!State.isLive && mock.project) {
+    currentStageName = agentLabel(mock.project.currentAgent);
+  }
 
   el.innerHTML = `
     <div class="view-hd">
       <div class="view-breadcrumb">Project</div>
-      <div class="view-title">${escHtml(State.projectName || proj.name)}</div>
-      <div class="view-sub">${escHtml(proj.status === 'building' ? 'Pipeline is running…' : proj.status === 'ready' ? 'Build complete.' : proj.status)}</div>
+      <div class="view-title">${escHtml(State.projectName || 'Overview')}</div>
+      <div class="view-sub">${State.isLive
+        ? (isComplete ? 'Pipeline complete. Review the outputs below.' : 'Pipeline is running…')
+        : 'Demo mode — showing sample data.'}</div>
     </div>
+
+    ${isComplete ? `
+      <div class="done-card">
+        <div class="done-card-label">Pipeline Complete</div>
+        <div class="done-card-title">All stages finished successfully</div>
+        <div class="done-card-sub">Navigate the sidebar to inspect requirements, design, code, tests, review, and documentation.</div>
+      </div>
+    ` : ''}
 
     <div class="ov-grid">
       <div class="ov-card">
-        <div class="ov-card-label">Current Agent</div>
-        <div class="ov-card-val" style="font-size:20px">${agentLabel(proj.currentAgent)}</div>
-        <div class="ov-card-sub">${agentSub(proj.currentAgent)}</div>
+        <div class="ov-card-label">Current Stage</div>
+        <div class="ov-card-val">${escHtml(currentStageName)}</div>
+        <div class="ov-card-sub">${State.isLive ? 'Live pipeline' : 'Demo data'}</div>
       </div>
       <div class="ov-card">
         <div class="ov-card-label">Elapsed</div>
-        <div class="ov-card-val">${escHtml(proj.elapsed || '—')}</div>
-        <div class="ov-card-sub">Started ${escHtml(proj.started || '—')}</div>
+        <div class="ov-card-val">${escHtml(State.isLive ? elapsed : (mock.project?.elapsed || '—'))}</div>
+        <div class="ov-card-sub">Session ${State.sessionId ? State.sessionId.slice(0, 8) + '…' : '—'}</div>
       </div>
     </div>
 
@@ -623,7 +811,7 @@ function renderOverview(data) {
       <div class="sec-title">Pipeline</div>
       <div class="pipeline-flow">
         ${pipeline.map((s, i) => `
-          <div class="pf-stage ${s.status}">
+          <div class="pf-stage ${s.status || 'queued'}">
             <div class="pf-track">
               <div class="pf-dot"></div>
               ${i < pipeline.length - 1 ? '<div class="pf-line"></div>' : ''}
@@ -631,7 +819,7 @@ function renderOverview(data) {
             <div class="pf-content">
               <div>
                 <div class="pf-name">${escHtml(s.label)}</div>
-                <div class="pf-meta">${s.count || statusLabel(s.status)}</div>
+                <div class="pf-meta">${s.count || statusLabel(s.status || 'queued')}</div>
               </div>
               <div class="pf-time">${s.completedAt || ''}</div>
             </div>
@@ -639,77 +827,26 @@ function renderOverview(data) {
         `).join('')}
       </div>
     </div>
-    ${State.isLive ? '<div style="margin-top:16px; font-family:var(--font-mono); font-size:11px; color:var(--text-muted)">Live · Real pipeline running</div>' : '<div style="margin-top:16px; font-family:var(--font-mono); font-size:11px; color:var(--text-muted)">Demo · Pipeline data from last run</div>'}
   `;
-
-  // Inject pipeline signal into the flow visualization
-  setTimeout(() => {
-    const flow = el?.querySelector('.pipeline-flow');
-    if (flow && !flow.querySelector('.pipeline-signal')) {
-      const sig = document.createElement('div');
-      sig.className = 'pipeline-signal';
-      flow.appendChild(sig);
-    }
-  }, 80);
 }
 
-/* ── Trace map builder ─────────────────── */
-function buildTraceMap(req) {
-  const map = {};
-  const design = MockData.design;
-  (req.user_stories || []).forEach((s, i) => {
-    const id = typeof s === 'string' ? `US-00${i + 1}` : s.id || `US-00${i + 1}`;
-    const comp = design.components[i % design.components.length];
-    map[id] = [
-      { id, name: typeof s === 'string' ? s.slice(0, 40) : s.want || s, type: 'User Story' },
-      { id: comp?.id || 'C-01', name: comp?.name || 'Component', type: 'Design Component' },
-      { id: `tests/test_${(comp?.name || '').toLowerCase().replace(/\s/g, '_')}.py`, name: 'Test file', type: 'Test' },
-    ];
-  });
-  return map;
-}
-
-window.traceStory = function (id, el) {
-  if (!id) return;
-  const panel = document.querySelector('.trace-panel');
-  const chain = MockData && buildTraceMap(MockData.requirements)[id];
-  if (!panel || !chain) return;
-
-  panel.querySelector('.trace-chain').innerHTML = chain.map(n => `
-    <div class="trace-node">
-      <div class="trace-node-line"><div class="trace-node-dot"></div><div class="trace-node-stem"></div></div>
-      <div class="trace-node-body">
-        <div class="trace-node-id">${escHtml(n.id)}</div>
-        <div class="trace-node-name">${escHtml(n.name)}</div>
-        <div class="trace-node-type">${escHtml(n.type)}</div>
-      </div>
-    </div>
-  `).join('');
-  panel.classList.add('open');
-};
-
-function injectTracePanelDOM() {
-  if (document.querySelector('.trace-panel')) return;
-  const p = document.createElement('div');
-  p.className = 'trace-panel';
-  p.innerHTML = `
-    <div class="trace-panel-title">
-      Traceability
-      <button class="trace-close" onclick="document.querySelector('.trace-panel').classList.remove('open')">✕</button>
-    </div>
-    <div class="trace-chain"></div>
-  `;
-  document.body.appendChild(p);
+function formatElapsed(ms) {
+  const secs = Math.floor(ms / 1000);
+  const mins = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 function agentLabel(id) {
-  return { requirement: 'Requirement Agent', design: 'Design Agent', code: 'Code Agent', test: 'Test Agent', review: 'Review Agent', documentation: 'Documentation Agent' }[id] || '—';
-}
-function agentSub(id) {
-  return { requirement: 'Generating requirements', design: 'Designing architecture', code: 'Generating repository', test: 'Running test suite', review: 'Evaluating quality', documentation: 'Writing docs' }[id] || '';
+  const map = {
+    requirement: 'Requirement Agent', design: 'Design Agent', code: 'Code Agent',
+    test: 'Test Agent', review: 'Review Agent', documentation: 'Documentation Agent'
+  };
+  return map[id] || '—';
 }
 function statusLabel(s) {
-  return { done: 'Completed', running: 'Running…', queued: 'Queued', failed: 'Failed' }[s] || s;
+  const map = { done: 'Completed', running: 'Running…', queued: 'Queued', failed: 'Failed' };
+  return map[s] || s;
 }
 
 /* ── Requirements ────────────────────────── */
@@ -717,18 +854,17 @@ function renderRequirementsView(req) {
   const el = $('view-requirement');
   if (!el) return;
   const stories = req.user_stories || [];
-  const traceMap = buildTraceMap(req);
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Requirements</div>
+      <div class="view-breadcrumb">Pipeline · Stage 01</div>
       <div class="view-title">Requirements</div>
       <div class="view-sub">${escHtml(req.problem_statement || '')}</div>
     </div>
 
     ${req.objectives?.length ? `<div class="sec">
       <div class="sec-title">Objectives</div>
-      <ul class="req-list">${req.objectives.map(o => `<li>${escHtml(o)}</li>`).join('')}</ul>
+      <ul class="req-list">${req.objectives.map(o => `<li>${escHtml(displayText(o))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${stories.length ? `<div class="sec">
@@ -746,33 +882,34 @@ function renderRequirementsView(req) {
     ${req.functional_requirements?.length ? `<div class="sec">
       <div class="sec-title">Functional Requirements</div>
       <ul class="req-list">${req.functional_requirements.map(r => {
-    const parts = typeof r === 'string' ? r.split(':') : [r.id || '', r];
-    return `<li><span class="req-id">${escHtml(parts[0] || '')}</span>${escHtml(parts.slice(1).join(':').trim() || r)}</li>`;
+    const parts = typeof r === 'string' ? r.split(':') : [r.id || '', displayText(r)];
+    return `<li><span class="req-id">${escHtml(parts[0] || '')}</span>${escHtml(parts.slice(1).join(':').trim() || displayText(r))}</li>`;
   }).join('')}</ul>
     </div>` : ''}
 
     ${req.non_functional_requirements?.length ? `<div class="sec">
       <div class="sec-title">Non-Functional Requirements</div>
-      <ul class="req-list">${req.non_functional_requirements.map(r => `<li>${escHtml(typeof r === 'string' ? r : JSON.stringify(r))}</li>`).join('')}</ul>
+      <ul class="req-list">${req.non_functional_requirements.map(r => `<li>${escHtml(displayText(r))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${req.acceptance_criteria?.length ? `<div class="sec">
       <div class="sec-title">Acceptance Criteria</div>
-      <ul class="req-list">${req.acceptance_criteria.map(a => `<li>${escHtml(a)}</li>`).join('')}</ul>
+      <ul class="req-list">${req.acceptance_criteria.map(a => `<li>${escHtml(displayText(a))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${renderInOutScope(req)}
 
     ${req.constraints?.length ? `<div class="sec">
       <div class="sec-title">Constraints</div>
-      <ul class="req-list">${req.constraints.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>
+      <ul class="req-list">${req.constraints.map(c => `<li>${escHtml(displayText(c))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${req.open_questions?.length ? `<div class="sec">
       <div class="sec-title">Open Questions</div>
-      <ul class="req-list">${req.open_questions.map(q => `<li>${escHtml(q)}</li>`).join('')}</ul>
+      <ul class="req-list">${req.open_questions.map(q => `<li>${escHtml(displayText(q))}</li>`).join('')}</ul>
     </div>` : ''}
   `;
+  el.dataset.rendered = '1';
 }
 
 function renderInOutScope(req) {
@@ -781,12 +918,12 @@ function renderInOutScope(req) {
     <div class="sec-title">Scope</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
       <div>
-        <div style="font-size:12px;font-weight:600;color:var(--green);margin-bottom:10px">In Scope</div>
-        <ul class="req-list">${(req.in_scope || []).map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>
+        <div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:10px">In Scope</div>
+        <ul class="req-list">${(req.in_scope || []).map(s => `<li>${escHtml(displayText(s))}</li>`).join('')}</ul>
       </div>
       <div>
-        <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:10px">Out of Scope</div>
-        <ul class="req-list">${(req.out_of_scope || []).map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:10px">Out of Scope</div>
+        <ul class="req-list">${(req.out_of_scope || []).map(s => `<li>${escHtml(displayText(s))}</li>`).join('')}</ul>
       </div>
     </div>
   </div>`;
@@ -801,7 +938,7 @@ function renderDesignView(design) {
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Design</div>
+      <div class="view-breadcrumb">Pipeline · Stage 02</div>
       <div class="view-title">Architecture</div>
       <div class="view-sub">${escHtml(design.architecture || '')}</div>
     </div>
@@ -813,8 +950,8 @@ function renderDesignView(design) {
         <tbody>
           ${comps.map(c => `<tr>
             <td class="comp-id">${escHtml(typeof c === 'string' ? '' : c.id || '')}</td>
-            <td style="font-weight:600">${escHtml(typeof c === 'string' ? c : c.name || '')}</td>
-            <td class="tag-muted">${escHtml(typeof c === 'string' ? '' : c.responsibility || '')}</td>
+            <td style="font-weight:600">${escHtml(typeof c === 'string' ? c : displayText(c.name || c))}</td>
+            <td class="tag-muted">${escHtml(typeof c === 'string' ? '' : displayText(c.responsibility))}</td>
             <td><div class="comp-deps">${(typeof c === 'string' ? [] : c.deps || []).map(d => `<span class="comp-dep-tag">${escHtml(d)}</span>`).join('')}</div></td>
           </tr>`).join('')}
         </tbody>
@@ -823,7 +960,7 @@ function renderDesignView(design) {
 
     ${design.api_endpoints?.length ? `<div class="sec">
       <div class="sec-title">API Endpoints</div>
-      <ul class="req-list">${design.api_endpoints.map(e => `<li style="font-family:var(--font-mono);font-size:13px">${escHtml(e)}</li>`).join('')}</ul>
+      <ul class="req-list">${design.api_endpoints.map(e => `<li style="font-family:var(--font-mono);font-size:12px">${escHtml(displayText(e))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${decisions.length ? `<div class="sec">
@@ -831,8 +968,8 @@ function renderDesignView(design) {
       ${decisions.map(d => `
         <div class="decision-card">
           <div class="dec-id">${escHtml(typeof d === 'string' ? 'DEC' : d.id || 'DEC')}</div>
-          <div class="dec-decision">${escHtml(typeof d === 'string' ? d : d.decision || d)}</div>
-          ${typeof d !== 'string' && d.reason ? `<div class="dec-reason">${escHtml(d.reason)}</div>` : ''}
+          <div class="dec-decision">${escHtml(typeof d === 'string' ? d : d.decision || displayText(d))}</div>
+          ${typeof d !== 'string' && d.reason ? `<div class="dec-reason">${escHtml(displayText(d.reason))}</div>` : ''}
           ${typeof d !== 'string' && d.impacted?.length ? `<div class="dec-impact">${d.impacted.map(i => `<span class="comp-dep-tag">${escHtml(i)}</span>`).join('')}</div>` : ''}
         </div>
       `).join('')}
@@ -840,9 +977,10 @@ function renderDesignView(design) {
 
     ${design.edge_cases?.length ? `<div class="sec">
       <div class="sec-title">Edge Cases</div>
-      <ul class="req-list">${design.edge_cases.map(e => `<li>${escHtml(e)}</li>`).join('')}</ul>
+      <ul class="req-list">${design.edge_cases.map(e => `<li>${escHtml(displayText(e))}</li>`).join('')}</ul>
     </div>` : ''}
   `;
+  el.dataset.rendered = '1';
 }
 
 /* ── Code ────────────────────────────────── */
@@ -850,11 +988,11 @@ function renderCodeView(code) {
   const el = $('view-code');
   if (!el) return;
   const files = code.files || [];
-
   const firstFile = files[0];
+
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Code</div>
+      <div class="view-breadcrumb">Pipeline · Stage 03</div>
       <div class="view-title">Generated Repository</div>
       ${code.generated_project_path ? `<div class="view-sub" style="font-family:var(--font-mono);font-size:12px">${escHtml(code.generated_project_path)}</div>` : ''}
     </div>
@@ -870,32 +1008,37 @@ function renderCodeView(code) {
             </div>
           `).join('')}
         </div>
-        <div class="cw-content" id="cwContent">
-          ${firstFile ? `<span style="color:var(--text-dim)"># ${escHtml(firstFile.path || '')}\n# ${escHtml(firstFile.description || '')}\n\n</span><span style="color:var(--text-muted)"># This file will be populated when the Code Agent\n# writes source files to disk.\n</span>` : ''}
-        </div>
+        <div class="cw-content" id="cwContent">${firstFile
+      ? `<pre class="cw-source">${escHtml(firstFile.content || `// ${firstFile.path || 'File'} has not been returned yet.`)}</pre>`
+      : ''}</div>
       </div>
     </div>` : ''}
 
     ${code.dependencies?.length ? `<div class="sec">
       <div class="sec-title">Dependencies</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
-        ${code.dependencies.map(d => `<span class="comp-dep-tag" style="font-size:13px;padding:4px 10px">${escHtml(d)}</span>`).join('')}
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${code.dependencies.map(d => `<span class="comp-dep-tag" style="font-size:12px;padding:4px 8px">${escHtml(d)}</span>`).join('')}
       </div>
     </div>` : ''}
 
     ${code.setup_instructions ? `<div class="sec">
-      <div class="sec-title">Setup</div>
+      <div class="sec-title">Setup Instructions</div>
       <pre class="arch-diagram" style="margin:0">${escHtml(code.setup_instructions)}</pre>
     </div>` : ''}
   `;
+  el.dataset.rendered = '1';
 }
 
-window.selectCodeFile = function (el) {
+window.selectCodeFile = function (fileEl) {
   document.querySelectorAll('.cw-file').forEach(f => f.classList.remove('active'));
-  el.classList.add('active');
+  fileEl.classList.add('active');
   const content = $('cwContent');
   if (content) {
-    content.innerHTML = `<span style="color:var(--text-dim)"># ${escHtml(el.dataset.path)}\n# ${escHtml(el.dataset.desc)}\n\n</span><span style="color:var(--text-muted)"># Source generated by Code Agent.\n# View the file on disk at:\n# ${escHtml(State.pipelineData?.code?.generated_project_path || MockData.code.generated_project_path)}/${escHtml(el.dataset.path)}\n</span>`;
+    const path = fileEl.dataset.path;
+    const desc = fileEl.dataset.desc;
+    const sourceFiles = State.pipelineData?.code?.files || window.MockData?.code?.files || [];
+    const selectedFile = sourceFiles.find(file => file.path === path) || {};
+    content.innerHTML = `<pre class="cw-source">${escHtml(selectedFile.content || `// ${path}\n// ${desc}\n// Source content is not available yet.`)}</pre>`;
   }
 };
 
@@ -904,24 +1047,29 @@ function renderTestsView(tests) {
   const el = $('view-test');
   if (!el) return;
   const cases = tests.cases || [];
+  const passed = tests.passed ?? tests.passed_tests ?? 0;
+  const failed = tests.failed ?? tests.failed_tests ?? 0;
+  const errors = Array.isArray(tests.errors) ? tests.errors.length : (tests.errors ?? 0);
+  const output = tests.output ?? tests.raw_output ?? '';
+  const testStatus = tests.status ?? (tests.success ? 'pass' : 'fail');
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Tests</div>
+      <div class="view-breadcrumb">Pipeline · Stage 04</div>
       <div class="view-title">Test Results</div>
     </div>
     <div class="test-header">
       <div class="test-summary-nums">
-        <div class="tsn"><div class="tsn-val tag-green">${tests.passed ?? 0}</div><div class="tsn-lbl">Passed</div></div>
-        <div class="tsn"><div class="tsn-val tag-red">${tests.failed ?? 0}</div><div class="tsn-lbl">Failed</div></div>
-        <div class="tsn"><div class="tsn-val" style="color:var(--amber)">${tests.errors ?? 0}</div><div class="tsn-lbl">Errors</div></div>
-        ${tests.duration ? `<div class="tsn"><div class="tsn-val" style="font-size:24px;color:var(--text-dim)">${escHtml(tests.duration)}</div><div class="tsn-lbl">Duration</div></div>` : ''}
+        <div class="tsn"><div class="tsn-val tag-green">${passed}</div><div class="tsn-lbl">Passed</div></div>
+        <div class="tsn"><div class="tsn-val tag-red">${failed}</div><div class="tsn-lbl">Failed</div></div>
+        <div class="tsn"><div class="tsn-val" style="color:var(--amber)">${errors}</div><div class="tsn-lbl">Errors</div></div>
+        ${tests.duration ? `<div class="tsn"><div class="tsn-val" style="font-size:22px;color:var(--text-dim)">${escHtml(tests.duration)}</div><div class="tsn-lbl">Duration</div></div>` : ''}
       </div>
-      <div class="artifact-badge ${tests.status === 'pass' ? 'badge-done' : tests.status === 'fail' ? 'badge-fail' : 'badge-queue'}">${escHtml(tests.status || 'unknown')}</div>
+      <div class="artifact-badge ${testStatus === 'pass' ? 'badge-done' : testStatus === 'fail' ? 'badge-fail' : 'badge-queue'}">${escHtml(testStatus)}</div>
     </div>
     ${cases.length ? `<div class="sec">
       <div class="sec-title">Test Cases</div>
-      <div class="test-cases" id="testCaseList">
+      <div class="test-cases">
         ${cases.map(tc => `
           <div class="tc" onclick="toggleTestCase(this)">
             <div class="tc-status ${tc.status === 'pass' ? 'tc-pass' : 'tc-fail'}">${tc.status === 'pass' ? '✓' : '✕'}</div>
@@ -930,25 +1078,25 @@ function renderTestsView(tests) {
             <div class="tc-expect">${escHtml(tc.expected || '')} → ${escHtml(tc.actual || '')}</div>
           </div>
           ${tc.status !== 'pass' && tc.logs ? `
-            <div class="tc-detail hidden" data-for="${escHtml(tc.id || '')}">
+            <div class="tc-detail hidden">
               <pre class="tc-log">${escHtml(tc.logs)}</pre>
             </div>
           ` : ''}
         `).join('')}
       </div>
     </div>` : ''}
-    ${tests.output ? `<div class="sec">
+    ${output ? `<div class="sec">
       <div class="sec-title">Raw Output</div>
-      <pre class="arch-diagram">${escHtml(tests.output)}</pre>
+      <pre class="arch-diagram">${escHtml(output)}</pre>
     </div>` : ''}
   `;
+  el.dataset.rendered = '1';
 }
 
 window.toggleTestCase = function (el) {
   const next = el.nextElementSibling;
   if (next && next.classList.contains('tc-detail')) {
     next.classList.toggle('hidden');
-    el.classList.toggle('expanded');
   }
 };
 
@@ -962,7 +1110,7 @@ function renderReviewView(review, approvalStatus) {
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Review</div>
+      <div class="view-breadcrumb">Pipeline · Stage 05</div>
       <div class="view-title">Quality Gate</div>
       <div class="artifact-badge ${approved ? 'badge-done' : 'badge-warn'}" style="margin-top:8px">
         ${approved ? '✓ Approved' : '⚠ Pending Review'}
@@ -984,11 +1132,11 @@ function renderReviewView(review, approvalStatus) {
     </div>` : ''}
 
     ${(review.defects && review.defects.length) ? `<div class="sec">
-      <div class="sec-title">Blocking Defects to Fix</div>
+      <div class="sec-title">Blocking Defects</div>
       ${review.defects.map(d => `
         <div class="finding high">
-          <div class="finding-sev">BLOCKING DEFECT</div>
-          <div class="finding-title">${escHtml(d)}</div>
+          <div class="finding-sev">Blocking Defect</div>
+          <div class="finding-title">${escHtml(displayText(d))}</div>
         </div>
       `).join('')}
     </div>` : ''}
@@ -998,26 +1146,20 @@ function renderReviewView(review, approvalStatus) {
       ${findings.map(f => `
         <div class="finding ${f.severity || 'low'}">
           <div class="finding-sev">${escHtml(f.severity || 'low')} · ${escHtml(f.id || '')}</div>
-          <div class="finding-title">${escHtml(f.title || f)}</div>
-          ${f.detail ? `<div class="finding-detail">${escHtml(f.detail)}</div>` : ''}
+          <div class="finding-title">${escHtml(displayText(f.title || f))}</div>
+          ${f.detail ? `<div class="finding-detail">${escHtml(displayText(f.detail))}</div>` : ''}
         </div>
       `).join('')}
     </div>` : ''}
 
     ${review.summary ? `<div class="sec">
       <div class="sec-title">Summary</div>
-      <p style="font-size:14px;color:var(--text-dim);line-height:1.65">${escHtml(review.summary)}</p>
-      ${review.overall_score ? `<div style="margin-top:8px;font-size:12px;font-family:var(--font-mono);color:var(--accent-glow)">Overall Quality Rating: ${escHtml(String(review.overall_score))}/10</div>` : ''}
+      <p style="font-size:13px;color:var(--text-dim);line-height:1.65">${escHtml(review.summary)}</p>
+      ${review.overall_score ? `<div style="margin-top:8px;font-size:12px;font-family:var(--font-mono);color:var(--accent)">Quality Rating: ${escHtml(String(review.overall_score))}/10</div>` : ''}
     </div>` : ''}
-
-    <div class="review-actions">
-      <button class="action-btn action-approve" onclick="approveReview()">Approve</button>
-      <button class="action-btn action-rework"  onclick="requestRework()">Request Rework</button>
-    </div>
   `;
+  el.dataset.rendered = '1';
 }
-window.approveReview = function () { alert('Approval action — connect to backend to implement.'); };
-window.requestRework = function () { alert('Rework action — connect to backend to implement.'); };
 
 /* ── Documentation ───────────────────────── */
 function renderDocsView(docs) {
@@ -1026,18 +1168,19 @@ function renderDocsView(docs) {
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Documentation</div>
+      <div class="view-breadcrumb">Pipeline · Stage 06</div>
       <div class="view-title">Documentation</div>
     </div>
     <div class="doc-prose">
       ${docs.overview ? `<h3>Overview</h3><p>${escHtml(docs.overview)}</p>` : ''}
       ${docs.getting_started ? `<h3>Getting Started</h3><pre>${escHtml(docs.getting_started)}</pre>` : ''}
-      ${docs.features?.length ? `<h3>Features</h3><ul>${docs.features.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>` : ''}
+      ${docs.features?.length ? `<h3>Features</h3><ul>${docs.features.map(f => `<li>${escHtml(displayText(f))}</li>`).join('')}</ul>` : ''}
       ${docs.api_reference ? `<h3>API Reference</h3><p>${escHtml(docs.api_reference)}</p>` : ''}
       ${docs.architecture ? `<h3>Architecture</h3><p>${escHtml(docs.architecture)}</p>` : ''}
-      ${docs.known_limitations?.length ? `<h3>Known Limitations</h3><ul>${docs.known_limitations.map(l => `<li>${escHtml(l)}</li>`).join('')}</ul>` : ''}
+      ${docs.known_limitations?.length ? `<h3>Known Limitations</h3><ul>${docs.known_limitations.map(l => `<li>${escHtml(displayText(l))}</li>`).join('')}</ul>` : ''}
     </div>
   `;
+  el.dataset.rendered = '1';
 }
 
 /* ── Artifacts ───────────────────────────── */
@@ -1070,68 +1213,406 @@ function renderArtifactsView(artifacts) {
       </div>
     `).join('')}
   `;
+  el.dataset.rendered = '1';
 }
 
-/* ── Memory ──────────────────────────────── */
-function renderMemoryView(memory) {
-  const el = $('view-memory');
+function renderArtifactsViewLive(result) {
+  const el = $('view-artifacts');
   if (!el) return;
+
+  const stages = [];
+  if (result.requirements && Object.keys(result.requirements).length) {
+    stages.push({ name: 'Requirements', version: result.requirements_version || 1 });
+  }
+  if (result.design && Object.keys(result.design).length) {
+    stages.push({ name: 'Design', version: result.design_version || 1 });
+  }
+  if (result.code && Object.keys(result.code).length) {
+    stages.push({ name: 'Code', version: result.code_version || 1 });
+  }
+  if (result.test_results && Object.keys(result.test_results).length) {
+    stages.push({ name: 'Tests', version: result.test_version || 1 });
+  }
+  if (result.review && Object.keys(result.review).length) {
+    stages.push({ name: 'Review', version: result.review_version || 1 });
+  }
+  if (result.documentation && Object.keys(result.documentation).length) {
+    stages.push({ name: 'Documentation', version: result.documentation_version || 1 });
+  }
 
   el.innerHTML = `
     <div class="view-hd">
       <div class="view-breadcrumb">Project</div>
-      <div class="view-title">Project Memory</div>
-      <div class="view-sub">Decisions, constraints, and context retained across the pipeline.</div>
+      <div class="view-title">Artifacts</div>
+      <div class="view-sub">Outputs generated by the pipeline.</div>
     </div>
-
-    <div class="sec">
-      <div class="sec-title">Decisions</div>
-      ${(memory.decisions || []).map(d => `
-        <div class="mem-item">
-          <div class="mem-id">${escHtml(d.id)}</div>
-          <div class="mem-title">${escHtml(d.title)}</div>
-          <div class="mem-detail">${escHtml(d.detail)}</div>
-          ${d.impact?.length ? `<div class="mem-impact">${d.impact.map(i => `<span class="mem-tag">${escHtml(i)}</span>`).join('')}</div>` : ''}
+    ${stages.length ? stages.map(s => `
+      <div class="art-group">
+        <div class="art-group-name">${escHtml(s.name)}</div>
+        <div class="art-versions">
+          <div class="art-ver">
+            <div class="art-ver-num">v${s.version}</div>
+            <div class="art-ver-info">
+              <div class="art-ver-changes">${escHtml(s.name)} output</div>
+            </div>
+            <span class="artifact-badge badge-done">current</span>
+          </div>
         </div>
-      `).join('')}
-    </div>
-
-    <div class="sec">
-      <div class="sec-title">Constraints</div>
-      ${(memory.constraints || []).map(c => `
-        <div class="mem-item">
-          <div class="mem-id">${escHtml(c.id)}</div>
-          <div class="mem-title">${escHtml(c.title)}</div>
-          <div class="mem-detail">${escHtml(c.detail)}</div>
-        </div>
-      `).join('')}
-    </div>
-
-    <div class="sec">
-      <div class="sec-title">Rejected Approaches</div>
-      ${(memory.rejected || []).map(r => `
-        <div class="mem-item mem-rejected">
-          <div class="mem-title">${escHtml(r.title)}</div>
-          <div class="mem-detail">${escHtml(r.reason)}</div>
-        </div>
-      `).join('')}
-    </div>
-
-    ${memory.previous_findings?.length ? `<div class="sec">
-      <div class="sec-title">Previous Review Findings</div>
-      ${memory.previous_findings.map(f => `
-        <div class="mem-item">
-          <div class="mem-id tag-muted">${escHtml(f.from)}</div>
-          <div class="mem-title">${escHtml(f.title)}</div>
-          <div style="margin-top:6px"><span class="artifact-badge ${f.status === 'open' ? 'badge-warn' : 'badge-done'}">${escHtml(f.status)}</span></div>
-        </div>
-      `).join('')}
-    </div>` : ''}
+      </div>
+    `).join('') : `
+      <div class="empty-state">
+        <div class="empty-state-icon">○</div>
+        <div class="empty-state-title">No artifacts yet</div>
+        <div class="empty-state-sub">Artifacts will appear as the pipeline produces outputs.</div>
+      </div>
+    `}
   `;
+  el.dataset.rendered = '1';
+}
+
+/* ── Models view ─────────────────────────── */
+function renderModelsView() {
+  const el = $('view-models');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="view-hd">
+      <div class="view-breadcrumb">Configuration</div>
+      <div class="view-title">Model Configuration</div>
+      <div class="view-sub">Edit each agent's model ID below and click <strong>Save All Models</strong> to apply.</div>
+    </div>
+    <div class="models-view-grid">
+      ${STAGE_DEFS.map(def => {
+    const cfg = MODEL_CONFIG[def.id] || {};
+    const isOllama = cfg.provider === 'Ollama';
+    return `
+          <div class="mv-agent-card">
+            <div class="mv-agent-left">
+              <div class="mv-agent-name">
+                ${escHtml(def.label)} Agent
+              </div>
+              <div class="mv-agent-desc">${escHtml(cfg.role || def.desc)}</div>
+              <div style="margin-top:6px">
+                <span class="mcm-provider-tag ${isOllama ? 'ollama' : 'openrouter'}">${escHtml(cfg.provider || 'Unknown')}</span>
+                ${isOllama ? '<span class="mcm-provider-tag ollama" style="margin-left:4px">Local</span>' : ''}
+              </div>
+            </div>
+            <div class="mv-agent-right">
+              <div class="mcm-model-label">Model ID</div>
+              <input
+                class="mcm-model-select mv-model-input"
+                id="mv-input-${def.id}"
+                type="text"
+                value="${escHtml(cfg.model || '')}"
+                placeholder="e.g. google/gemma-4-26b-a4b-it:free"
+              />
+              <div class="mcm-ui-note">Edit then click Save All Models</div>
+            </div>
+          </div>
+        `;
+  }).join('')}
+    </div>
+    <div class="mv-save-row">
+      <button class="mv-save-btn" id="mvSaveBtn" type="button" onclick="saveModelsView()">💾 Save All Models</button>
+      <span class="mv-save-note" id="mvSaveNote"></span>
+    </div>
+  `;
+  el.dataset.rendered = '1';
+}
+
+window.saveModelsView = async function () {
+  const updated = {};
+  STAGE_DEFS.forEach(def => {
+    const input = $(`mv-input-${def.id}`);
+    if (input && input.value.trim()) {
+      updated[def.id] = input.value.trim();
+    }
+  });
+
+  const saveBtn = $('mvSaveBtn');
+  const note = $('mvSaveNote');
+  if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: updated })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      Object.entries(updated).forEach(([agentId, modelId]) => {
+        if (MODEL_CONFIG[agentId]) MODEL_CONFIG[agentId].model = modelId;
+      });
+      if (saveBtn) { saveBtn.textContent = '✓ Saved!'; }
+      if (note) { note.textContent = 'Models saved to .env — restart server to apply.'; note.style.color = '#4ade80'; }
+      setTimeout(() => {
+        if (saveBtn) { saveBtn.textContent = '💾 Save All Models'; saveBtn.disabled = false; }
+      }, 2000);
+    } else {
+      if (saveBtn) { saveBtn.textContent = '⚠ Error'; saveBtn.disabled = false; }
+      if (note) { note.textContent = data.error || 'Save failed'; note.style.color = '#f87171'; }
+    }
+  } catch (err) {
+    if (saveBtn) { saveBtn.textContent = '⚠ Error'; saveBtn.disabled = false; }
+    if (note) { note.textContent = 'Server unreachable'; note.style.color = '#f87171'; }
+  }
+};
+function renderGitHubView() {
+  const el = $('view-github');
+  if (!el) return;
+
+  const releaseData = State.pipelineData?.release || {};
+  const hasRelease = releaseData.status === 'success';
+
+  el.innerHTML = `
+    <div class="view-hd">
+      <div class="view-breadcrumb">Project</div>
+      <div class="view-title">GitHub Integration</div>
+      <div class="view-sub">Push your generated project to a GitHub repository.</div>
+    </div>
+
+    <div class="gh-layout">
+      <!-- Main config card -->
+      <div class="gh-card">
+        <div class="gh-card-header">
+          <svg class="gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          <div class="gh-card-title">Repository Settings</div>
+        </div>
+
+        <div class="gh-card-body">
+          <div class="gh-field">
+            <label class="gh-label" for="githubRepoInput">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 4.5h10M2 7h10M2 9.5h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Repository URL or owner/repo
+            </label>
+            <div class="gh-input-wrap">
+              <input id="githubRepoInput" class="gh-input" type="text" value="${escHtml(State.githubRepo)}" placeholder="https://github.com/owner/repo.git" spellcheck="false" />
+            </div>
+          </div>
+
+          <div class="gh-field">
+            <label class="gh-label" for="githubTokenInput">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v4M5 3h4M3 7a4 4 0 108 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Personal Access Token <span class="gh-optional">(optional)</span>
+            </label>
+            <div class="gh-input-wrap">
+              <input id="githubTokenInput" class="gh-input" type="password" placeholder="ghp_xxxxxxxxxxxx" spellcheck="false" />
+            </div>
+            <div class="gh-hint">Used for private repos. Never stored beyond this session.</div>
+          </div>
+
+          <div class="gh-field">
+            <label class="gh-label" for="githubCommitMsg">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M7 1v3M7 10v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Commit message
+            </label>
+            <div class="gh-input-wrap">
+              <input id="githubCommitMsg" class="gh-input" type="text" value="Release approved project via IdeaToProduct" placeholder="Initial commit" spellcheck="false" />
+            </div>
+          </div>
+        </div>
+
+        <div class="gh-card-footer">
+          <div class="gh-status" id="ghStatus">
+            ${hasRelease
+              ? `<span class="gh-status-badge gh-status-success">
+                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                   Published to ${escHtml(releaseData.remote_url || '')}
+                 </span>`
+              : `<span class="gh-status-badge gh-status-idle">
+                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="2" fill="currentColor" opacity="0.4"/></svg>
+                   Ready to publish
+                 </span>`
+            }
+          </div>
+          <button class="gh-publish-btn" id="githubPublishBtn" type="button">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 11h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            Publish to GitHub
+          </button>
+        </div>
+      </div>
+
+      <!-- Info panel -->
+      <div class="gh-info">
+        <div class="gh-info-card">
+          <div class="gh-info-title">How it works</div>
+          <div class="gh-info-steps">
+            <div class="gh-step">
+              <span class="gh-step-num">1</span>
+              <span>Pipeline completes all 6 stages</span>
+            </div>
+            <div class="gh-step">
+              <span class="gh-step-num">2</span>
+              <span>Code is reviewed and approved</span>
+            </div>
+            <div class="gh-step">
+              <span class="gh-step-num">3</span>
+              <span>Release Agent pushes to your repo</span>
+            </div>
+          </div>
+        </div>
+        <div class="gh-info-card">
+          <div class="gh-info-title">Generated files</div>
+          <div class="gh-file-tree" id="ghFileTree">
+            <span class="gh-file-empty">Run the pipeline to see generated files.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Wire up publish button
+  const btn = $('githubPublishBtn');
+  if (btn) {
+    btn.onclick = () => {
+      const repo = $('githubRepoInput').value.trim();
+      if (!repo) {
+        $('githubRepoInput').classList.add('gh-input-error');
+        setTimeout(() => $('githubRepoInput').classList.remove('gh-input-error'), 800);
+        return;
+      }
+      State.githubRepo = repo;
+
+      // Show publishing state
+      btn.disabled = true;
+      btn.innerHTML = `<span class="gh-spinner"></span> Publishing…`;
+      const statusEl = $('ghStatus');
+      if (statusEl) {
+        statusEl.innerHTML = `<span class="gh-status-badge gh-status-running"><span class="gh-spinner"></span> Pushing to ${escHtml(repo)}…</span>`;
+      }
+
+      fetch(`${API}/api/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: State.sessionId, repo_url: repo })
+      }).then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Release failed');
+        if (statusEl) statusEl.innerHTML = `<span class="gh-status-badge gh-status-running">Release started for ${escHtml(repo)}…</span>`;
+        startPolling();
+      }).catch(error => {
+        if (statusEl) statusEl.innerHTML = `<span class="gh-status-badge gh-status-error">${escHtml(error.message)}</span>`;
+        btn.disabled = false;
+        btn.innerHTML = 'Retry Publish';
+      });
+    };
+  }
+
+  // Populate file tree if we have data
+  const codeFiles = State.pipelineData?.code?.files;
+  if (codeFiles && Array.isArray(codeFiles)) {
+    const treeEl = $('ghFileTree');
+    if (treeEl) {
+      treeEl.innerHTML = codeFiles.map(f => `<div class="gh-file-item"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 1.5h4l3 3v6H3v-9z" stroke="currentColor" stroke-width="1" fill="none"/><path d="M7 1.5v3h3" stroke="currentColor" stroke-width="1"/></svg> ${escHtml(f.path || f)}</div>`).join('');
+    }
+  }
+
+  el.dataset.rendered = '1';
 }
 
 /* ═════════════════════════════════════════════════
-   12. PIPELINE ERROR
+   12. MODEL CONFIG OVERLAY
+═════════════════════════════════════════════════ */
+function openModelConfig() {
+  const overlay = $('modelConfigOverlay');
+  const cont = $('mcmAgents');
+  if (!overlay || !cont) return;
+
+  cont.innerHTML = STAGE_DEFS.map(def => {
+    const cfg = MODEL_CONFIG[def.id] || {};
+    const isOllama = cfg.provider === 'Ollama';
+    return `
+      <div class="mcm-agent">
+        <div class="mcm-agent-info">
+          <div class="mcm-agent-name">
+            ${escHtml(def.label)} Agent
+          </div>
+          <div class="mcm-agent-role">${escHtml(cfg.role || '')}</div>
+          <div class="mcm-agent-provider">
+            <span class="mcm-provider-tag ${isOllama ? 'ollama' : 'openrouter'}">${escHtml(cfg.provider || 'Unknown')}</span>
+            ${isOllama ? '<span class="mcm-provider-tag ollama">Local</span>' : ''}
+          </div>
+        </div>
+        <div class="mcm-agent-config">
+          <div class="mcm-model-label">Model ID</div>
+          <input class="mcm-model-select" type="text"
+            id="mcm-input-${def.id}"
+            value="${escHtml(cfg.model || '')}"
+            placeholder="e.g. google/gemma-4-26b-a4b-it:free"
+            title="Enter the model ID to use for the ${escHtml(def.label)} agent" />
+          <div class="mcm-ui-note">Edit and click Save Changes to apply</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  overlay.classList.remove('hidden');
+}
+
+window.closeModelConfig = function () {
+  $('modelConfigOverlay')?.classList.add('hidden');
+};
+
+window.saveModelConfig = async function () {
+  const updated = {};
+  STAGE_DEFS.forEach(def => {
+    const input = $(`mcm-input-${def.id}`);
+    if (input && input.value.trim()) {
+      updated[def.id] = input.value.trim();
+    }
+  });
+
+  const saveBtn = $('mcmSaveBtn');
+  if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: updated })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // Update local MODEL_CONFIG
+      Object.entries(updated).forEach(([agentId, modelId]) => {
+        if (MODEL_CONFIG[agentId]) MODEL_CONFIG[agentId].model = modelId;
+      });
+      if (saveBtn) { saveBtn.textContent = '✓ Saved'; }
+      setTimeout(() => {
+        $('modelConfigOverlay')?.classList.add('hidden');
+        if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }
+        // Re-render models view if visible
+        if ($('view-models') && !$('view-models').classList.contains('hidden')) {
+          delete $('view-models').dataset.rendered;
+          renderModelsView();
+        }
+      }, 900);
+    } else {
+      if (saveBtn) { saveBtn.textContent = '⚠ Error'; saveBtn.disabled = false; }
+      alert('Save failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    if (saveBtn) { saveBtn.textContent = '⚠ Error'; saveBtn.disabled = false; }
+    alert('Could not reach server: ' + err.message);
+  }
+};
+
+// Close overlays on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    $('clarifyOverlay')?.classList.add('hidden');
+    $('modelConfigOverlay')?.classList.add('hidden');
+  }
+});
+
+/* ═════════════════════════════════════════════════
+   13. PIPELINE ERROR
 ═════════════════════════════════════════════════ */
 function showPipelineError(msg) {
   setNavPipelineStatus('error');
@@ -1140,37 +1621,51 @@ function showPipelineError(msg) {
   const el = $('view-overview');
   if (!el) return;
   el.insertAdjacentHTML('afterbegin', `
-    <div class="err-card" style="margin-bottom:32px">
+    <div class="err-card" style="margin-bottom:28px">
       <div class="err-label">Agent Interrupted</div>
       <div class="err-title">Pipeline stopped</div>
       <div class="err-msg">${escHtml(msg)}</div>
       <div class="err-actions">
-        <button class="ghost-btn-sm" onclick="exitStudio()">Exit</button>
+        <button class="btn-ghost" type="button" onclick="exitStudio()">Exit</button>
       </div>
     </div>
   `);
 }
 
 /* ═════════════════════════════════════════════════
-   13. DEMO MODE — enter studio without running
-       Called from the "How it works" section
+   14. DEMO MODE
 ═════════════════════════════════════════════════ */
 window.openDemo = function () {
-  State.projectName = MockData.project.name;
+  const mock = window.MockData || {};
+  State.projectName = mock.project?.name || 'Demo Project';
   State.isLive = false;
-  enterStudio(MockData.project.name, 'done');
-  buildPipelineStages(MockData.pipeline);
-  buildActivityFeed(MockData.activity);
+  State.pipelineData = null;
+  enterStudio(State.projectName, 'done');
+  buildPipelineStages(mock.pipeline || []);
+  buildActivityFeed(mock.activity || []);
 
-  // Pre-render all views with mock data
   STAGE_DEFS.forEach(s => renderViewIfNeeded(s.id));
   renderViewIfNeeded('artifacts');
-  renderViewIfNeeded('memory');
 };
 
 /* ═════════════════════════════════════════════════
-   14. HELPERS
+   15. HELPERS
 ═════════════════════════════════════════════════ */
+function displayText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(displayText).join(', ');
+  if (typeof value === 'object') {
+    const preferred = ['description', 'text', 'requirement', 'criterion', 'value', 'name', 'title', 'detail'];
+    const key = preferred.find(candidate => value[candidate] !== undefined && value[candidate] !== null);
+    if (key) return displayText(value[key]);
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+  return String(value);
+}
+
 function escHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1179,444 +1674,101 @@ function escHtml(s) {
 function shakeEl(el) {
   if (!el) return;
   el.style.animation = 'none';
-  el.offsetHeight;
+  el.offsetHeight; // trigger reflow
   el.style.animation = 'shake 0.35s ease';
   setTimeout(() => { el.style.animation = ''; }, 400);
 }
 
-/* Inject shake keyframe */
-const _s = document.createElement('style');
-_s.textContent = `
-  @keyframes shake {
-    0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)}
-    40%{transform:translateX(6px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)}
-  }
-`;
-document.head.appendChild(_s);
+/* ═════════════════════════════════════════════════
+   16. PARTICLE CANVAS ANIMATION
+═════════════════════════════════════════════════ */
+(function initParticles() {
+  const canvas = document.getElementById('particleCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-/* ===== visual/live-console layer (was fx.js) ===== */
-/* fx.js — additive layer over app.js. Reads State (from app.js) and observes fetch responses; never changes API calls. */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
-  const AG = [['requirement', 'requirements.agent'], ['design', 'design.agent'], ['code', 'code.agent'], ['test', 'test.agent'], ['review', 'review.agent'], ['documentation', 'documentation.agent']];
-  // Narration shown while a stage runs. Illustrative text — the backend does not stream logs yet.
-  const SAY = { requirement: ['> analyzing product idea...', '> extracting actors...', '> generating user stories...', '> validating acceptance criteria...'], design: ['> selecting architecture...', '> generating component graph...', '> defining API contracts...'], code: ['> creating repository...', '> generating files...', '> installing dependencies...'], test: ['> running pytest...', 'test_user_auth ........ PASS', 'test_api_health ....... PASS'], review: ['> checking consistency...', '> checking implementation...', '> checking test coverage...'], documentation: ['> generating README...', '> generating API documentation...'] };
-  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const hl = t => esc(t).replace(/(PASS|✓)/g, '<i class=g>$1</i>').replace(/(FAIL|✕)/g, '<i class=r>$1</i>').replace(/^&gt;/, '<i class=y>&gt;</i>').replace(/([\w-]+\.(?:md|json|py)|src\/|tests\/)/g, '<i class=b>$1</i>');
-  const mk = (h, c) => { const d = document.createElement('div'); d.className = c; d.innerHTML = h; return d };
-  const land = document.getElementById('screenLanding');
+  let w, h;
+  const particles = [];
+  const PARTICLE_COUNT = 50;
 
-  // glow + ghost parallax
-  const glow = mk('', 'fx-glow'); document.body.appendChild(glow);
-  let mx = innerWidth / 2, my = innerHeight / 3; addEventListener('pointermove', e => { mx = e.clientX; my = e.clientY });
-  const ghost = document.querySelector('.fx-ghost');
-  (function t() { glow.style.transform = `translate(${mx}px,${my}px)`; if (ghost && !RM) ghost.style.transform = `translate(${(mx - innerWidth / 2) * -.012}px,${scrollY * -.06}px)`; requestAnimationFrame(t) })();
-
-  // draggable
-  function drag(w) {
-    const bar = w.querySelector('.fx-bar'); let sx, sy, ox = 0, oy = 0, on = 0;
-    bar.onpointerdown = e => { if (e.target.closest('button')) return; on = 1; sx = e.clientX - ox; sy = e.clientY - oy; bar.setPointerCapture(e.pointerId) };
-    bar.onpointermove = e => { if (!on) return; ox = e.clientX - sx; oy = e.clientY - sy; w.style.transform = `translate(${ox}px,${oy}px)` };
-    bar.onpointerup = () => on = 0
+  function resize() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    w = canvas.width = rect.width;
+    h = canvas.height = rect.height;
   }
 
-  // landing windows: idea.md mirrors the textarea, pipeline mirrors run state
-  const wIdea = mk('<div class="fx-bar"><span>idea.md</span><em>live</em></div><div class="fx-body" id="fxIdea"><div>waiting for your idea<i class="y">_</i></div></div>', 'fx-win fx-a');
-  const wPipe = mk('<div class="fx-bar"><span>pipeline</span><em id="fxClock">idle</em></div><ol class="fx-body fx-flow" id="fxFlow" style="counter-reset:none"></ol>', 'fx-win fx-b');
-  if (land) { land.append(wIdea, wPipe);[wIdea, wPipe].forEach(drag) }
-  const ta = document.getElementById('ideaInput');
-  if (ta) ta.addEventListener('input', () => {
-    const ls = ta.value.trim().split(/(?<=[.!?])\s+|,\s*/).filter(Boolean).slice(0, 5);
-    document.getElementById('fxIdea').innerHTML = (ls.length ? ls : ['waiting for your idea_']).map(l => `<div>${hl(l).replace(/\b(track|create|build|send|split|search|edit|export|reset|log|check)\w*/gi, '<i class=g>$&</i>')}</div>`).join('')
-  });
-
-  // console window (fixed, visible during a run, also inside the studio)
-  const con = mk('<div class="fx-bar"><span id="fxTitle">agent-console</span><em id="fxState">idle</em><button id="fxMin" aria-label="Collapse console">–</button></div><div class="fx-flowrow" id="fxRow"></div><div class="fx-body" id="fxLog" aria-live="polite"></div>', 'fx-win fx-console');
-  document.body.appendChild(con); drag(con);
-  con.querySelector('#fxMin').onclick = () => con.classList.toggle('min');
-  const log = con.querySelector('#fxLog'), row = con.querySelector('#fxRow');
-  AG.forEach(() => row.appendChild(document.createElement('span')));
-  const say = (t) => { log.appendChild(mk(hl(t), '')); log.scrollTop = 1e5 };
-
-  let cur = -1, timer = null, t0 = 0, lines = 0;
-  function paint() {
-    const fl = document.getElementById('fxFlow'); if (fl) fl.innerHTML = AG.map((a, i) => `<li class="${i < cur ? 'done' : i === cur ? 'run' : ''}">${a[0]}</li>`).join('');
-    [...row.children].forEach((s, i) => s.className = i < cur ? 'done' : i === cur ? 'run' : '');
-    const c = document.getElementById('fxClock'); if (c) c.textContent = cur < 0 ? 'idle' : ((Date.now() - t0) / 1000 | 0) + 's'
+  function createParticle() {
+    return {
+      x: Math.random() * w,
+      y: Math.random() * h,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: -Math.random() * 0.4 - 0.1,
+      radius: Math.random() * 1.5 + 0.5,
+      opacity: Math.random() * 0.4 + 0.1,
+      color: Math.random() > 0.6
+        ? `rgba(46, 194, 126, OPACITY)`
+        : Math.random() > 0.5
+          ? `rgba(94, 120, 255, OPACITY)`
+          : `rgba(212, 162, 78, OPACITY)`,
+    };
   }
-  function advance(to) {
-    if (to <= cur) return; if (cur >= 0) say('✓ ' + AG[cur][0] + ' complete'); cur = to; lines = 0;
-    document.getElementById('fxTitle').textContent = AG[cur] ? AG[cur][1] : 'agent-console'; document.getElementById('fxState').textContent = 'running'; paint()
-  }
-  function start() {
-    con.classList.add('on'); log.innerHTML = ''; t0 = Date.now(); cur = -1; advance(0); clearInterval(timer);
-    timer = setInterval(() => {
-      const s = AG[cur] && SAY[AG[cur][0]]; if (!s) return;
-      if (lines < s.length) say(s[lines++]); else if (cur < AG.length - 2 && !fromBackend && Date.now() - lastSwitch > 9000) { lastSwitch = Date.now(); advance(cur + 1) }
-      paint()
-    }, RM ? 200 : 1100)
-  }
-  let fromBackend = false, lastSwitch = Date.now();
-  function finish(ok, msg) { clearInterval(timer); if (cur >= 0) say(ok ? '✓ ' + AG[cur][0] + ' complete' : '✕ ' + msg); cur = ok ? AG.length : cur; document.getElementById('fxState').textContent = ok ? '✓ done' : '✕ ' + (msg ? 'stopped' : 'error'); paint(); if (ok) say('✓ pipeline complete') }
 
-  // observe (never alter) API traffic
-  const _f = window.fetch;
-  window.fetch = async function (u, o) {
-    const r = await _f.apply(this, arguments);
-    try {
-      const url = String(u);
-      if (url.endsWith('/api/start') && r.ok) start();
-      else if (url.includes('/api/status/')) {
-        r.clone().json().then(d => {
-          const st = d.stage || d.current_stage || (d.result && d.result.current_stage); const i = AG.findIndex(a => a[0] === st);
-          if (i >= 0 && d.is_running) { fromBackend = true; advance(i) }
-          if (!d.is_running) { d.status === 'error' ? finish(false, d.error || 'error') : d.status === 'clarification' ? (say('? waiting for your answers'), document.getElementById('fxState').textContent = 'needs input', clearInterval(timer)) : finish(true) }
-        }).catch(() => { })
-      }
-    } catch (e) { }
-    return r
-  };
-
-  // bulb / cord theme toggle
-  const root = document.documentElement;
-  const setT = t => { root.dataset.theme = t; try { localStorage.setItem('itp-theme', t) } catch (e) { } };
-  const flip = () => setT(root.dataset.theme === 'light' ? 'dark' : 'light');
-  const bulb = mk('<div class="fx-cord" id="fxCord"></div><button id="fxBulb" aria-label="Toggle light or dark theme"><svg viewBox="0 0 40 56"><path d="M20 4a14 14 0 0 0-8 25c2 2 3 4 3 7h10c0-3 1-5 3-7A14 14 0 0 0 20 4z"/><rect x="14" y="38" width="12" height="9" rx="2"/></svg></button>', 'fx-bulb');
-  document.body.appendChild(bulb);
-  bulb.querySelector('#fxBulb').onclick = flip;
-  const c = bulb.querySelector('#fxCord'); let y0 = null;
-  c.onpointerdown = e => { y0 = e.clientY; c.setPointerCapture(e.pointerId); c.style.transition = 'none' };
-  c.onpointermove = e => { if (y0 !== null) c.style.height = 64 + Math.min(60, Math.max(0, e.clientY - y0)) + 'px' };
-  c.onpointerup = e => { if (y0 === null) return; const pulled = e.clientY - y0 > 25 || Math.abs(e.clientY - y0) < 3; y0 = null; c.style.transition = ''; c.style.height = '64px'; if (pulled) flip() };
-  paint();
-})();
-
-/* ===== part 2: story sections, agent detail panel, artifact shelf, quality gate ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const host = document.getElementById('how-it-works'); if (!host) return;
-  const RM = matchMedia('(prefers-reduced-motion:reduce)').matches, D = window.MockData || {};
-  const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const hl = t => esc(t).replace(/(PASS|✓)/g, '<i class=g>$1</i>').replace(/(FAIL|✕)/g, '<i class=r>$1</i>').replace(/^&gt;/, '<i class=y>&gt;</i>');
-  const AG = [
-    ['Requirements', 'requirements.agent', ['> analyzing product idea...', '> extracting actors...', '> generating user stories...', '> validating acceptance criteria...'], ['✓ 12 requirements generated', '✓ 8 acceptance criteria', '✓ scope validated']],
-    ['Design', 'design.agent', ['> selecting architecture...', '> generating component graph...', '> defining API contracts...'], ['✓ 8 components', '✓ 6 endpoints']],
-    ['Code', 'code.agent', ['> creating repository...', '> generating files...', '> installing dependencies...'], ['✓ 13 files written']],
-    ['Tests', 'test.agent', ['> running pytest...', 'test_create_habit ..... PASS', 'test_streak_reset ..... PASS', 'test_timezone_edge ... FAIL'], ['✕ 1 test failed  → sent to review']],
-    ['Review', 'review.agent', ['> checking consistency...', '> checking implementation...', '> checking test coverage...'], ['↻ rework requested: Code Agent', '✓ quality gate passed after rework']],
-    ['Documentation', 'documentation.agent', ['> generating README...', '> generating API documentation...'], ['✓ README generated']]
-  ];
-  // sections (injected after "Six agents. One pipeline.")
-  host.insertAdjacentHTML('afterend', `
-<section class="p2" id="p2-live"><div class="p2-line"></div><h2 class="rv">Watch it<br><span class="o">work.</span></h2>
- <div class="p2-live"><div class="p2-tabs" id="p2Tabs" role="tablist"></div>
- <div class="fx-win p2-term" style="position:relative"><div class="fx-bar" style="cursor:default"><span id="p2File">requirements.agent</span><em>sample run · demo data</em></div><div class="fx-body" id="p2Log" aria-live="polite"></div></div></div></section>
-<section class="p2" id="p2-art"><div class="p2-line"></div><h2 class="rv">Everything it builds,<br><span class="o">kept.</span></h2><div class="p2-shelf" id="p2Shelf"></div></section>
-<section class="p2" id="p2-gate"><div class="p2-line"></div><h2 class="rv">Nothing ships<br><span class="o">unchecked.</span></h2>
- <div class="fx-win p2-gate" id="p2Gate" style="position:relative"><div class="fx-bar" style="cursor:default"><span>quality gate</span><em>demo data</em></div><div class="fx-body" id="p2GateBody" style="counter-reset:none"></div></div>
- <button class="p2-btn" id="p2Fail">Simulate a failed test</button></section>
-<section class="p2 p2-cta"><div class="p2-line"></div><h2 class="rv">Start with one<br><span class="o">sentence.</span></h2><button class="p2-btn" id="p2Go">Describe your idea</button></section>
-<div class="fx-win p2-prev" id="p2Prev" role="dialog" aria-label="Artifact preview"><div class="fx-bar" style="cursor:default"><span id="p2PName">file</span><button id="p2PClose" aria-label="Close preview">×</button></div><pre id="p2PBody"></pre></div>
-<div class="fx-win p2-prev" id="p2Det" role="dialog" aria-label="Agent details"><div class="fx-bar" style="cursor:default"><span id="p2DName">agent</span><button id="p2DClose" aria-label="Close details">×</button></div><pre id="p2DBody" style="white-space:pre-wrap"></pre></div>`);
-
-  // scroll reveals (mask + line draw), not generic fades
-  const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && (e.target.classList.add('in'), io.unobserve(e.target))), { threshold: .2 });
-  document.querySelectorAll('.rv,.p2-line').forEach(el => RM ? el.classList.add('in') : io.observe(el));
-
-  // connection track + click detail on the existing six cards
-  const grid = host.querySelector('.hiw-grid'), cards = [...host.querySelectorAll('.hiw-card')];
-  if (grid) {
-    grid.insertAdjacentHTML('beforebegin', '<div class="p2-track" aria-hidden="true"><b id="p2Bar"></b><i></i></div>');
-    const bar = document.getElementById('p2Bar');
-    cards.forEach((c, i) => {
-      c.tabIndex = 0; c.setAttribute('role', 'button');
-      c.addEventListener('mouseenter', () => bar.style.width = ((i + 1) / cards.length * 100) + '%');
-      c.addEventListener('focus', () => bar.style.width = ((i + 1) / cards.length * 100) + '%');
-      const open = () => {
-        const g = k => (c.querySelector('.ipo-tag.' + k)?.nextElementSibling?.textContent || '—').replace(/\s+/g, ' ').trim();
-        document.getElementById('p2DName').textContent = c.querySelector('h3').textContent + ' agent';
-        document.getElementById('p2DBody').textContent = 'Purpose\n  ' + g('proc') + '\n\nInput\n  ' + g('in') + '\n\nOutput\n  ' + g('out') + '\n\nStatus\n  ready\n\nDepends on\n  ' + (i ? cards[i - 1].querySelector('h3').textContent : 'nothing (starts the pipeline)');
-        document.getElementById('p2Det').classList.add('on');
-      };
-      c.addEventListener('click', open); c.addEventListener('keydown', e => e.key === 'Enter' && open());
-    });
-  }
-  document.getElementById('p2DClose').onclick = () => document.getElementById('p2Det').classList.remove('on');
-  document.getElementById('p2PClose').onclick = () => document.getElementById('p2Prev').classList.remove('on');
-  addEventListener('keydown', e => e.key === 'Escape' && document.querySelectorAll('.p2-prev').forEach(p => p.classList.remove('on')));
-
-  // live execution replay (sample data, plays when scrolled into view or a tab is clicked)
-  const tabs = document.getElementById('p2Tabs'), log = document.getElementById('p2Log');
-  let tok = 0;
-  async function play(i) {
-    const my = ++tok; const [name, file, cmds, res] = AG[i];
-    [...tabs.children].forEach((t, k) => t.className = 'p2-tab' + (k < i ? ' done' : k === i ? ' on' : ''));
-    document.getElementById('p2File').textContent = file; log.innerHTML = '';
-    const add = t => { const d = document.createElement('div'); d.innerHTML = hl(t); log.appendChild(d); };
-    for (const t of cmds) { await new Promise(r => setTimeout(r, RM ? 20 : 480)); if (my !== tok) return; add(t); }
-    for (const t of res) { await new Promise(r => setTimeout(r, RM ? 20 : 380)); if (my !== tok) return; add(t); }
-    tabs.children[i].className = 'p2-tab done on';
-  }
-  AG.forEach((a, i) => { const b = document.createElement('button'); b.className = 'p2-tab'; b.textContent = a[0]; b.setAttribute('role', 'tab'); b.onclick = () => play(i); tabs.appendChild(b); });
-  async function autoplay() { for (let i = 0; i < AG.length; i++) { const my = tok + 1; play(i); await new Promise(r => setTimeout(r, RM ? 200 : 4200)); if (tok !== my) return; } }
-  new IntersectionObserver((es, o) => es[0].isIntersecting && (o.disconnect(), autoplay()), { threshold: .3 }).observe(document.getElementById('p2-live'));
-
-  // artifact shelf (content comes from MockData samples)
-  const j = o => JSON.stringify(o, null, 2);
-  const R = D.requirements || {}, DS = D.design || {}, C = D.code || {}, T = D.tests || {}, RV = D.review || {}, DC = D.documentation || {};
-  const ART = {
-    'requirements.md': ['12 requirements', '# Requirements\n\n' + (R.problem_statement || '') + '\n\n' + (R.functional_requirements || []).join('\n')],
-    'architecture.md': ['8 components', '# Architecture\n\n' + (DS.architecture || '') + '\n\n' + (DS.components || []).map(c => c.id + '  ' + c.name + ' — ' + c.responsibility).join('\n')],
-    'api-spec.json': ['6 endpoints', j(DS.api_endpoints || [])],
-    'src/': ['13 files', (C.files || []).map(f => f.path + '  — ' + f.description).join('\n')],
-    'tests/': ['9 cases', (T.output || '') + '\n\n' + (T.cases || []).map(c => c.id + ' ' + c.name + ' ' + c.status.toUpperCase()).join('\n')],
-    'review.md': ['3 findings', '# Review\n\n' + (RV.summary || '') + '\n\n' + (RV.findings || []).map(f => f.severity.toUpperCase() + '  ' + f.title).join('\n')],
-    'README.md': ['setup + API docs', '# README\n\n' + (DC.overview || '') + '\n\n' + (DC.getting_started || '')]
-  };
-  const shelf = document.getElementById('p2Shelf');
-  Object.entries(ART).forEach(([n, [s, body]]) => {
-    const b = document.createElement('button'); b.className = 'p2-art'; b.innerHTML = esc(n) + '<small>' + esc(s) + '</small>';
-    b.onclick = () => { document.getElementById('p2PName').textContent = n; document.getElementById('p2PBody').textContent = body || '(no sample content)'; document.getElementById('p2Prev').classList.add('on'); };
-    shelf.appendChild(b);
-  });
-
-  // quality gate with rework demo
-  const gate = document.getElementById('p2Gate'), gb = document.getElementById('p2GateBody'), fb = document.getElementById('p2Fail');
-  const rows = a => a.map(([k, v, c]) => '<div class="row"><span>' + k + '</span><span class="st ' + (c || '') + '">' + v + '</span></div>').join('');
-  function ok() { gate.className = 'fx-win p2-gate ok'; gb.innerHTML = rows([['Requirements', '✓'], ['Architecture', '✓'], ['Implementation', '✓'], ['Tests', '✓'], ['Consistency', '✓'], ['STATUS', 'READY', 'big']]); }
-  ok();
-  fb.onclick = async () => {
-    fb.disabled = true; const w = ms => new Promise(r => setTimeout(r, RM ? 20 : ms));
-    gate.className = 'fx-win p2-gate bad';
-    gb.innerHTML = rows([['Implementation', '✓'], ['Tests', '✕'], ['Review', '◉ checking'], ['STATUS', 'REWORK REQUIRED', 'big']]); await w(1500);
-    gb.innerHTML = rows([['Code Agent', '↻ returning to Code Agent...'], ['Tests', 'waiting'], ['Review', 'waiting'], ['STATUS', 'REWORK REQUIRED', 'big']]); await w(1800);
-    gb.innerHTML = rows([['Code Agent', '✓ patched'], ['Tests', '◉ re-running'], ['Review', 'waiting'], ['STATUS', 'IN PROGRESS', 'big']]); await w(1600);
-    ok(); fb.disabled = false;
-  };
-  document.getElementById('p2Go').onclick = () => { const l = document.getElementById('screenLanding'); scrollTo({ top: 0, behavior: RM ? 'auto' : 'smooth' }); setTimeout(() => { const t = document.getElementById('ideaInput'); t && t.focus(); }, RM ? 0 : 600); };
-})();
-
-/* ===== part 3: window canvas hero, question chips (auto-decide), tilt / magnetic / counters ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
-  const land = document.getElementById('screenLanding'); if (!land) return;
-  const sleep = ms => new Promise(r => setTimeout(r, RM ? 40 : ms));
-  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const hl = t => esc(t).replace(/(PASS|✓)/g, '<i class=g>$1</i>').replace(/(FAIL|✕)/g, '<i class=r>$1</i>').replace(/(↻[^<]*)/, '<i class=y>$1</i>').replace(/^&gt;/, '<i class=y>&gt;</i>').replace(/([\w-]+\.(?:md|json|py)|src\/|tests\/)/g, '<i class=b>$1</i>');
-  const mk = (h, c) => { const d = document.createElement('div'); d.className = c; d.innerHTML = h; return d; };
-  const drag = w => {
-    const bar = w.querySelector('.fx-bar'); let sx, sy, ox = 0, oy = 0, on = 0;
-    bar.onpointerdown = e => { if (e.target.closest('button')) return; on = 1; sx = e.clientX - ox; sy = e.clientY - oy; bar.setPointerCapture(e.pointerId); };
-    bar.onpointermove = e => { if (!on) return; ox = e.clientX - sx; oy = e.clientY - sy; w.style.transform = 'translate(' + ox + 'px,' + oy + 'px)'; };
-    bar.onpointerup = () => on = 0;
-  };
-
-  // 1) more windows on the hero canvas: console loop, artifacts, quality gate
-  const wC = mk('<div class="fx-bar"><span id="cvT">requirements.agent</span><em>sample loop · demo</em></div><div class="fx-body" id="cvL"></div>', 'fx-win fx-c');
-  const wD = mk('<div class="fx-bar"><span>artifacts</span><em>click to open</em></div><div class="fx-body" id="cvA" style="padding:8px 10px"></div>', 'fx-win fx-d');
-  const wE = mk('<div class="fx-bar"><span>quality-gate</span><em>demo</em></div><div class="fx-body fx-gate" id="cvG" style="counter-reset:none"></div>', 'fx-win fx-e');
-  land.append(wC, wD, wE);[wC, wD, wE].forEach(drag);
-
-  const S = [['requirements.agent', ['> analyzing product idea...', '> extracting actors...', '> generating user stories...', '✓ 12 requirements generated']],
-  ['design.agent', ['> selecting architecture...', '> generating component graph...', '✓ 8 components, 6 APIs']],
-  ['code.agent', ['> creating repository...', '> generating files...', '✓ 13 files written']],
-  ['test.agent', ['> running pytest...', 'test_api_health ..... PASS', 'test_user_auth ...... FAIL', '✕ 1 test failed']],
-  ['review.agent', ['> checking consistency...', '↻ rework: returning to Code Agent']],
-  ['code.agent', ['> patching src/auth.py', '✓ 2 files updated']],
-  ['test.agent', ['> running pytest...', 'test_user_auth ...... PASS', '✓ 42 tests executed']],
-  ['documentation.agent', ['> generating README...', '✓ README generated']]];
-  const L = wC.querySelector('#cvL'), T = wC.querySelector('#cvT');
-  (async function loop() {
-    for (; ;) for (const [f, ls] of S) {
-      while (document.querySelector('.fx-console.on') || land.classList.contains('hidden') || document.hidden) await sleep(1500);
-      T.textContent = f; L.innerHTML = '';
-      for (const l of ls) { await sleep(650); const d = document.createElement('div'); d.innerHTML = hl(l); L.appendChild(d); }
-      await sleep(900);
+  function init() {
+    resize();
+    particles.length = 0;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      particles.push(createParticle());
     }
-  })();
-  // artifacts open the preview built in part 2
-  const A = wD.querySelector('#cvA');
-  ['requirements.md', 'architecture.md', 'api-spec.json', 'src/', 'tests/', 'README.md'].forEach(n => {
-    const b = document.createElement('button'); b.className = 'fx-art'; b.textContent = '▸ ' + n;
-    b.onclick = () => { const t = [...document.querySelectorAll('.p2-art')].find(x => x.textContent.startsWith(n)); t && t.click(); };
-    A.appendChild(b);
-  });
-  // quality gate cycles a pass and a rework
-  const G = wE.querySelector('#cvG'), r = a => a.map(([k, v, c]) => '<div class="row"><span>' + k + '</span><span class="' + (c || '') + '">' + v + '</span></div>').join('');
-  const GS = [r([['Requirements', '✓', 'ok'], ['Architecture', '✓', 'ok'], ['Implementation', '✓', 'ok'], ['Tests', '◉ running'], ['STATUS', 'IN PROGRESS']]),
-  r([['Implementation', '✓', 'ok'], ['Tests', '✕', 'bad'], ['Review', '◉ checking'], ['STATUS', 'REWORK REQUIRED', 'bad']]),
-  r([['Code Agent', '↻ returning...', 'bad'], ['Tests', 'waiting'], ['STATUS', 'REWORK REQUIRED', 'bad']]),
-  r([['Requirements', '✓', 'ok'], ['Implementation', '✓', 'ok'], ['Tests', '✓', 'ok'], ['Consistency', '✓', 'ok'], ['STATUS', 'READY', 'ok']])];
-  let gi = 0; G.innerHTML = GS[0]; if (!RM) setInterval(() => { gi = (gi + 1) % GS.length; G.innerHTML = GS[gi]; }, 2600);
-
-  // 2) question chips: all optional, "auto" is always the default
-  const Q = { Platform: ['Web', 'Mobile', 'Both', 'Auto-detect'], Scope: ['Prototype', 'MVP', 'Production', 'Let AI decide'], Auth: ['Yes', 'No', 'Recommend'] };
-  const pick = { Platform: 'Auto-detect', Scope: 'Let AI decide', Auth: 'Recommend' };
-  const auto = { Platform: 'Auto-detect', Scope: 'Let AI decide', Auth: 'Recommend' };
-  const anchor = land.querySelector('.ic-examples');
-  if (anchor) {
-    const wrap = mk('', 'q-wrap');
-    Object.keys(Q).forEach(k => {
-      const row = mk('<span>' + k + '</span>', 'q-row'); row.setAttribute('role', 'radiogroup'); row.setAttribute('aria-label', k);
-      Q[k].forEach(o => {
-        const b = document.createElement('button'); b.type = 'button'; b.className = 'q-chip'; b.textContent = o; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', o === pick[k]);
-        b.onclick = () => { pick[k] = o; row.querySelectorAll('.q-chip').forEach(x => x.setAttribute('aria-checked', x === b)); }; row.appendChild(b);
-      });
-      wrap.appendChild(row);
-    });
-    wrap.appendChild(mk('Optional. Leave as is and the agents decide.', 'q-note'));
-    anchor.after(wrap);
-    // adds only the choices you changed to the idea text before app.js sends it (API shape unchanged)
-    document.addEventListener('click', e => {
-      if (!e.target.closest('#launchBtn')) return;
-      const ta = document.getElementById('ideaInput'); if (!ta || !ta.value.trim() || ta.value.includes('[Preferences:')) return;
-      const ch = Object.keys(pick).filter(k => pick[k] !== auto[k]).map(k => k + ': ' + pick[k]);
-      if (ch.length) ta.value = ta.value.trim() + '\n[Preferences: ' + ch.join('; ') + ']';
-    }, true);
   }
 
-  // 3) micro-interactions: tilt, magnetic buttons, counters
-  if (!RM) {
-    document.addEventListener('pointermove', e => {
-      const c = e.target.closest && e.target.closest('.hiw-card,.p2-art'); if (!c) return;
-      const b = c.getBoundingClientRect(); c.style.setProperty('--ry', ((e.clientX - b.left) / b.width - .5) * 6 + 'deg'); c.style.setProperty('--rx', (.5 - (e.clientY - b.top) / b.height) * 6 + 'deg');
-    });
-    document.addEventListener('pointerout', e => { const c = e.target.closest && e.target.closest('.hiw-card,.p2-art'); if (c) { c.style.setProperty('--rx', '0deg'); c.style.setProperty('--ry', '0deg'); } });
-    document.addEventListener('pointermove', e => {
-      const m = e.target.closest && e.target.closest('#launchBtn,.p2-btn'); if (!m || m.disabled) return;
-      const b = m.getBoundingClientRect(); m.style.transform = 'translate(' + (e.clientX - b.left - b.width / 2) * .08 + 'px,' + (e.clientY - b.top - b.height / 2) * .18 + 'px)';
-    });
-    document.addEventListener('pointerout', e => { const m = e.target.closest && e.target.closest('#launchBtn,.p2-btn'); if (m) m.style.transform = ''; });
-    land.querySelectorAll('.lst-val').forEach(el => {
-      const n = parseInt(el.textContent, 10), sfx = el.textContent.replace(/[0-9]/g, ''); if (!n) return; let t0 = null;
-      const step = ts => { t0 = t0 || ts; const p = Math.min((ts - t0) / 1200, 1); el.textContent = Math.round(n * (1 - Math.pow(1 - p, 3))) + sfx; p < 1 && requestAnimationFrame(step); }; requestAnimationFrame(step);
-    });
-  }
-})();
+  function animate() {
+    ctx.clearRect(0, 0, w, h);
 
-/* ===== part 5: hero is one clean full screen; idea input + running code live in a sandbox screen below ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const land = document.getElementById('screenLanding'), card = document.getElementById('ideaCard'); if (!land || !card) return;
-  const sb = document.createElement('section'); sb.id = 'sandbox'; sb.className = 'sb';
-  sb.innerHTML = '<p class="sb-cap">sandbox · describe an idea, watch the agents work</p><div class="sb-canvas" id="sbCanvas"></div>';
-  land.appendChild(sb);
-  const cv = sb.querySelector('#sbCanvas');
-  // idea input becomes a window (same DOM node, so #ideaInput / #launchBtn keep working with app.js)
-  const w = document.createElement('div'); w.className = 'fx-win sb-idea';
-  w.innerHTML = '<div class="fx-bar"><span>studio.idea</span><em>ready</em></div>';
-  w.appendChild(card); cv.appendChild(w);
-  [['.fx-c'], ['.fx-b'], ['.fx-d'], ['.fx-e'], ['.fx-a']].forEach(([s]) => { const e = land.querySelector(':scope > ' + s); if (e) cv.appendChild(e); });
-  // draggable idea window
-  (() => {
-    const bar = w.querySelector('.fx-bar'); let sx, sy, ox = 0, oy = 0, on = 0;
-    bar.onpointerdown = e => { on = 1; sx = e.clientX - ox; sy = e.clientY - oy; bar.setPointerCapture(e.pointerId); };
-    bar.onpointermove = e => { if (!on) return; ox = e.clientX - sx; oy = e.clientY - sy; w.style.transform = 'translate(' + ox + 'px,' + oy + 'px)'; };
-    bar.onpointerup = () => on = 0;
-  })();
-  // hero cue
-  const body = land.querySelector('.landing-body');
-  if (body) {
-    const a = document.createElement('a'); a.className = 'sb-cta'; a.href = '#sandbox'; a.textContent = 'Start building ↓'; body.appendChild(a);
-    a.onclick = e => { e.preventDefault(); sb.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth' }); setTimeout(() => { const t = document.getElementById('ideaInput'); t && t.focus({ preventScroll: true }); }, 700); };
-  }
-  new IntersectionObserver((es, o) => es[0].isIntersecting && (sb.classList.add('in'), o.disconnect()), { threshold: .15 }).observe(sb);
-})();
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
 
-/* ===== part 8: typewriter headline (text is exactly: "Turn your / idea into / a product.") ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const h = document.querySelector('.landing-heading'); if (!h) return;
-  const lines = [...h.querySelectorAll('.lh-line')]; if (!lines.length) return;
-  h.setAttribute('aria-label', lines.map(l => l.textContent.trim()).join(' '));   // screen readers get the full sentence at once
-  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;              // reduced motion: show the text as is
-  const texts = lines.map(l => l.textContent.trim());
-  const typed = lines.map((l, i) => {
-    l.innerHTML = '';
-    const wrap = document.createElement('span'); wrap.className = 'tw-wrap'; wrap.setAttribute('aria-hidden', 'true');
-    const ghost = document.createElement('span'); ghost.className = 'tw-ghost'; ghost.textContent = texts[i];
-    const t = document.createElement('span'); t.className = 'tw-type';
-    wrap.append(ghost, t); l.appendChild(wrap); return t;
-  });
-  const caret = document.createElement('span'); caret.className = 'tw-caret';
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  (async () => {
-    await sleep(350);
-    for (let i = 0; i < texts.length; i++) {
-      typed[i].appendChild(caret);
-      for (let c = 1; c <= texts[i].length; c++) {
-        typed[i].firstChild && typed[i].firstChild.nodeType === 3 ? typed[i].firstChild.nodeValue = texts[i].slice(0, c) : typed[i].insertBefore(document.createTextNode(texts[i].slice(0, c)), caret);
-        await sleep(60 + Math.random() * 70);
-      }
-      await sleep(i < texts.length - 1 ? 260 : 0);
+      // Wrap around
+      if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
+      if (p.x < -10) p.x = w + 10;
+      if (p.x > w + 10) p.x = -10;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fillStyle = p.color.replace('OPACITY', String(p.opacity));
+      ctx.fill();
     }
-  })();
-})();
 
-/* ===== part 9: floating artifacts around the hero (decorative; parallax + occasional glow) ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const land = document.getElementById('screenLanding'); if (!land) return;
-  const RM = matchMedia('(prefers-reduced-motion:reduce)').matches;
-  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const hl = t => esc(t).replace(/(PASS|✓)/g, '<i class=g>$1</i>').replace(/^&gt;/, '<i class=y>&gt;</i>').replace(/(\d+)/g, '<i class=p>$1</i>');
-  const DEF = [
-    ['hf1', 'requirements.agent', ['> extracting user stories', '✓ 12 requirements'], .6],
-    ['hf2', 'design.agent', ['> generating component graph', '✓ 8 components, 6 APIs'], 1],
-    ['hf3', 'test.agent', ['test_auth ..... PASS', '✓ 42 tests executed'], .8],
-    ['hf4', 'review.agent', ['> checking consistency', '✓ quality gate passed'], 1.2]
-  ];
-  const items = DEF.map(([c, t, ls, d]) => {
-    const el = document.createElement('div'); el.className = 'hf ' + c; el.setAttribute('aria-hidden', 'true'); el.dataset.d = d;
-    el.innerHTML = '<div class="fx-win"><div class="fx-bar"><span>' + t + '</span></div><div class="fx-body" style="padding:8px 11px">' + ls.map(l => '<div>' + hl(l) + '</div>').join('') + '</div></div>';
-    land.appendChild(el); return el;
-  });
-  if (RM) return;
-  let tx = 0, ty = 0, cx = 0, cy = 0;
-  addEventListener('pointermove', e => { tx = e.clientX / innerWidth - .5; ty = e.clientY / innerHeight - .5; });
-  (function tick() {
-    cx += (tx - cx) * .06; cy += (ty - cy) * .06;
-    items.forEach(el => { const d = +el.dataset.d; el.style.transform = 'translate(' + (cx * -26 * d).toFixed(1) + 'px,' + (cy * -20 * d).toFixed(1) + 'px)'; });
-    requestAnimationFrame(tick);
-  })();
-  setInterval(() => { if (document.hidden || land.classList.contains('hidden')) return; const w = items[Math.floor(Math.random() * items.length)].querySelector('.fx-win'); w.classList.add('lit'); setTimeout(() => w.classList.remove('lit'), 1400); }, 2600);
-})();
-
-/* ===== part 10: palette picker (accent + glow lights), saved in localStorage ===== */
-(() => {
-  'use strict';
-  if (document.documentElement.dataset.theme === 'formal') return;
-  const root = document.documentElement;
-  // [name, dark-mode colour, light-mode colour] — hues follow the code-editor palette idea
-  const P = [['code-green', '#2fd18f', '#0f9d6b'], ['code-blue', '#5a82e8', '#3557c9'], ['code-red', '#e0606e', '#c23b4a'], ['code-yellow', '#dcb85f', '#a67a12'], ['code-purple', '#8461e4', '#6a44d0'], ['code-aqua', '#9ed3f7', '#2b86c5']];
-  const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(',');
-  let cur = 0, glow = true;
-  try { cur = Math.min(P.length - 1, Math.max(0, +localStorage.getItem('itp-pal') || 0)); glow = localStorage.getItem('itp-glow') !== '0'; } catch (e) { }
-  function apply() {
-    const c = root.dataset.theme === 'light' ? P[cur][2] : P[cur][1], r = rgb(c), s = root.style;
-    s.setProperty('--accent', c); s.setProperty('--accent-rgb', r);
-    s.setProperty('--accent-dim', 'rgba(' + r + ',.12)'); s.setProperty('--accent-glow', 'rgba(' + r + ',.25)'); s.setProperty('--fx-glow', 'rgba(' + r + ',' + (root.dataset.theme === 'light' ? .22 : .16) + ')');
-    document.querySelectorAll('.pal .sw').forEach((b, i) => b.setAttribute('aria-checked', i === cur));
-    document.body.classList.toggle('no-glow', !glow);
-    const g = document.querySelector('.pal .gl'); g && g.setAttribute('aria-pressed', glow);
+    requestAnimationFrame(animate);
   }
-  const bar = document.createElement('div'); bar.className = 'pal'; bar.setAttribute('role', 'radiogroup'); bar.setAttribute('aria-label', 'Accent colour');
-  P.forEach((p, i) => {
-    const b = document.createElement('button'); b.className = 'sw'; b.style.setProperty('--c', p[1]); b.title = p[0]; b.setAttribute('role', 'radio'); b.setAttribute('aria-label', p[0]);
-    b.onclick = () => { cur = i; try { localStorage.setItem('itp-pal', i); } catch (e) { } apply(); }; bar.appendChild(b);
-  });
-  const gl = document.createElement('button'); gl.className = 'gl'; gl.textContent = 'glow'; gl.setAttribute('aria-label', 'Toggle glow lights');
-  gl.onclick = () => { glow = !glow; try { localStorage.setItem('itp-glow', glow ? '1' : '0'); } catch (e) { } apply(); };
-  bar.appendChild(gl); document.body.appendChild(bar);
-  ['a', 'b'].forEach(k => { const o = document.createElement('div'); o.className = 'pal-orb ' + k; o.setAttribute('aria-hidden', 'true'); document.body.appendChild(o); });
-  new MutationObserver(apply).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-  apply();
+
+  // Check reduced motion
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  init();
+  animate();
+  window.addEventListener('resize', resize);
 })();
+
+/* ═════════════════════════════════════════════════
+   17. PIPELINE STAGE HOVER GLOW
+═════════════════════════════════════════════════ */
+document.querySelectorAll('.pt-stage').forEach(stage => {
+  stage.addEventListener('mouseenter', () => {
+    stage.style.transition = 'transform 0.2s ease, color 0.2s ease';
+    stage.style.transform = 'translateY(-2px)';
+    const label = stage.querySelector('.pt-label');
+    const num = stage.querySelector('.pt-num');
+    if (label) label.style.color = 'var(--accent)';
+    if (num) num.style.color = 'var(--accent)';
+  });
+  stage.addEventListener('mouseleave', () => {
+    stage.style.transform = '';
+    const label = stage.querySelector('.pt-label');
+    const num = stage.querySelector('.pt-num');
+    if (label) label.style.color = '';
+    if (num) num.style.color = '';
+  });
+});

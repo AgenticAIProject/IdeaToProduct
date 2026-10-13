@@ -6,129 +6,155 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IdeaToProduct — Product Engineering Studio</title>
   <meta name="description"
-    content="Turn a product brief into requirements, architecture, source code, tests, review findings, and documentation." />
+    content="Transform a product brief into structured requirements, architecture, generated code, tests, quality review, and documentation." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;500&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
-  <script>document.documentElement.dataset.theme = "formal";</script>
+  <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@1,6..96,700&display=swap" rel="stylesheet">
 </head>
 
 <body>
-
   <!-- ═══════════════════════════════════════
      GLOBAL NAV
-════════════════════════════════════════ -->
-  <nav class="nav" id="mainNav">
+  ════════════════════════════════════════ -->
+  <nav class="nav" id="mainNav" role="navigation" aria-label="Main navigation">
     <div class="nav-inner">
-      <a href="#" class="nav-logo" id="navLogo">
-        <svg class="logo-hex" width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <polygon points="10,1 19,5.5 19,14.5 10,19 1,14.5 1,5.5" stroke="currentColor" stroke-width="1.4"
-            fill="none" />
-          <polygon points="10,5 15,7.8 15,13.2 10,16 5,13.2 5,7.8" fill="currentColor" opacity="0.25" />
+      <a href="#" class="nav-logo" id="navLogo" aria-label="IdeaToProduct home">
+        <svg class="logo-mark" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <polygon points="9,1 17,5 17,13 9,17 1,13 1,5" stroke="currentColor" stroke-width="1.2" fill="none" />
+          <polygon points="9,5 13,7 13,11 9,13 5,11 5,7" fill="currentColor" opacity="0.3" />
         </svg>
         <span>IdeaToProduct</span>
       </a>
-      <!-- landing nav -->
-      <div class="nav-right" id="navLanding">
-        <a href="#pipeline-overview" class="nav-link">Workflow stages</a>
+
+      <!-- Landing nav links -->
+      <div class="nav-links" id="navLanding">
+        <a href="#pipeline-overview" class="nav-link">Pipeline</a>
+        <button class="nav-link" id="navModelCfgBtn" type="button">Models</button>
       </div>
-      <!-- studio nav (shown when in studio) -->
-      <div class="nav-right nav-studio hidden" id="navStudio">
+
+      <!-- Studio nav (shown during workspace) -->
+      <div class="nav-links nav-studio hidden" id="navStudio">
         <span class="studio-project-name" id="studioProjectName">—</span>
-        <div class="pipeline-status-pill" id="navPipelineStatus">
-          <span class="pill-dot"></span>
-          <span class="pill-label" id="navPipelineLabel">Initializing</span>
+        <div class="pipeline-status" id="navPipelineStatus">
+          <span class="status-indicator" id="navStatusIndicator"></span>
+          <span class="status-label" id="navPipelineLabel">Initializing</span>
         </div>
-        <button class="ghost-btn-sm" onclick="exitStudio()">Exit</button>
+        <button class="nav-btn-ghost" id="navModelCfgBtn2" type="button">Models</button>
+        <button class="nav-btn-ghost" onclick="exitStudio()" type="button">Exit</button>
       </div>
+
+      <!-- Mobile menu toggle -->
+      <button class="mobile-menu-toggle hidden" id="mobileMenuToggle" aria-label="Toggle menu" type="button">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </nav>
 
   <!-- ═══════════════════════════════════════
      SCREEN: LANDING
-════════════════════════════════════════ -->
+  ════════════════════════════════════════ -->
   <section id="screenLanding" class="screen screen-landing">
-    <div class="landing-body">
-      <!-- Left -->
-      <div class="landing-left" id="landingLeft">
+    <!-- Animated background -->
+    <div class="landing-bg" aria-hidden="true">
+      <div class="bg-grid"></div>
+      <div class="bg-orb bg-orb-1"></div>
+      <div class="bg-orb bg-orb-2"></div>
+      <div class="bg-orb bg-orb-3"></div>
+      <canvas id="particleCanvas" class="bg-particles"></canvas>
+      <div class="bg-glow-line"></div>
+    </div>
+    <div class="landing-grid">
+      <!-- Left: Editorial headline + pipeline -->
+      <div class="landing-editorial" id="landingLeft">
         <p class="landing-eyebrow">
-          <span class="eyebrow-dot"></span>
-          PRODUCT ENGINEERING WORKSPACE
+          <span class="eyebrow-line"></span>
+          Product Engineering Studio
         </p>
+
         <h1 class="landing-heading">
           <span class="lh-line">From product</span>
-          <span class="lh-line lh-outline">idea to</span>
-          <span class="lh-line">working software.</span>
+          <span class="lh-line lh-serif">idea</span>
+          <span class="lh-line">to working</span>
+          <span class="lh-line lh-serif">software.</span>
         </h1>
-        <p class="landing-sub">Move from a clear brief to structured requirements, architecture, generated source,
-          executed tests, a quality review, and setup documentation.</p>
-        <div class="landing-stats">
-          <div class="lst"><span class="lst-val">06</span><span class="lst-lbl">Pipeline stages</span></div>
-          <div class="lst-div"></div>
-          <div class="lst"><span class="lst-val">01</span><span class="lst-lbl">Quality gate</span></div>
-          <div class="lst-div"></div>
-          <div class="lst"><span class="lst-val">Live</span><span class="lst-lbl">Build status</span></div>
-        </div>
-        <div class="hero-pipeline" id="pipeline-overview" aria-label="Six stage workflow">
-          <div class="hero-pipeline-head"><span>IDEA</span><span>PRODUCT</span></div>
-          <div class="hero-pipeline-track">
-            <span class="hero-node active">01</span><span class="hero-node">02</span><span
-              class="hero-node">03</span><span class="hero-node">04</span><span class="hero-node">05</span><span
-              class="hero-node">06</span>
-            <span class="hero-signal"></span>
+
+        <p class="landing-description">
+          Describe a product. Six autonomous agents produce requirements,
+          architecture, source code, tests, quality review, and documentation.
+        </p>
+
+        <!-- Pipeline visualization -->
+        <div class="pipeline-track" id="pipeline-overview" aria-label="Six-stage pipeline">
+          <div class="pt-stages">
+            <div class="pt-stage" data-stage="requirement">
+              <span class="pt-num">01</span>
+              <span class="pt-label">Requirements</span>
+            </div>
+            <div class="pt-stage" data-stage="design">
+              <span class="pt-num">02</span>
+              <span class="pt-label">Design</span>
+            </div>
+            <div class="pt-stage" data-stage="code">
+              <span class="pt-num">03</span>
+              <span class="pt-label">Code</span>
+            </div>
+            <div class="pt-stage" data-stage="test">
+              <span class="pt-num">04</span>
+              <span class="pt-label">Tests</span>
+            </div>
+            <div class="pt-stage" data-stage="review">
+              <span class="pt-num">05</span>
+              <span class="pt-label">Review</span>
+            </div>
+            <div class="pt-stage" data-stage="documentation">
+              <span class="pt-num">06</span>
+              <span class="pt-label">Docs</span>
+            </div>
           </div>
-          <div class="hero-pipeline-labels">
-            <span>Requirements</span><span>Design</span><span>Code</span><span>Tests</span><span>Review</span><span>Docs</span>
-          </div>
+          <div class="pt-connector"><span class="pt-signal"></span></div>
         </div>
       </div>
 
-      <!-- Right: idea input -->
-      <div class="landing-right" id="landingRight">
+      <!-- Right: Idea input card -->
+      <div class="landing-input" id="landingRight">
         <div class="idea-card" id="ideaCard">
-          <div class="idea-card-scan"></div>
-          <div class="ic-live-state"><span class="ic-live-dot"></span><span>READY FOR A PROJECT BRIEF</span></div>
           <div class="ic-header">
-            <span class="ic-step">01</span>
-            <span class="ic-title">Project brief</span>
+            <span class="ic-dot"></span>
+            <span class="ic-label">Project Brief</span>
           </div>
-          <div class="ic-textarea-wrap">
-            <textarea id="ideaInput" class="ic-textarea" placeholder="What should the product do? Who is it for? Include the key workflow and any important constraints." maxlength="800"
-              rows="5"></textarea>
-            <div class="ic-underline" id="icUnderline"></div>
+
+          <div class="ic-body">
+            <label for="ideaInput" class="sr-only">Describe your product idea</label>
+            <textarea id="ideaInput" class="ic-textarea"
+              placeholder="What should the product do? Describe the core workflow, target users, and any constraints."
+              maxlength="800" rows="5"></textarea>
           </div>
+
           <div class="ic-examples">
             <span class="ic-ex-label">Examples</span>
-            <button class="ic-chip" onclick="fillIdea(this)"
+            <button class="ic-chip" type="button" onclick="fillIdea(this)"
               data-idea="A minimalist habit tracker where users set daily goals, check them off, and build streaks. Reset at midnight, weekly email summary on Sunday.">Habit
               tracker</button>
-            <button class="ic-chip" onclick="fillIdea(this)"
+            <button class="ic-chip" type="button" onclick="fillIdea(this)"
               data-idea="An expense splitter for groups of friends. Log shared expenses, split by equal share or percentage, track who owes what, and settle debts.">Expense
               splitter</button>
-            <button class="ic-chip" onclick="fillIdea(this)"
+            <button class="ic-chip" type="button" onclick="fillIdea(this)"
               data-idea="A team knowledge base with markdown editing, tag-based search, version history, and export to PDF. No login required for read access.">Knowledge
               base</button>
           </div>
-          <!-- Interpreting panel (shown while typing) -->
-          <div class="ic-interpret" id="icInterpret" style="display:none">
-            <div class="ici-label">Interpreting idea</div>
-            <div class="ici-rows">
-              <div class="ici-row"><span class="ici-key">Product type</span><span class="ici-val" id="iciType">—</span>
-              </div>
-              <div class="ici-row"><span class="ici-key">Core workflow</span><span class="ici-val"
-                  id="iciWorkflow">—</span></div>
-              <div class="ici-row"><span class="ici-key">Features detected</span><span class="ici-val"
-                  id="iciFeatures">—</span></div>
-            </div>
-          </div>
+
           <div class="ic-footer">
-            <span class="ic-char-count"><span id="charCount">0</span><span class="ic-char-max"> / 800</span></span>
-            <button class="cta-btn" id="launchBtn" onclick="launchPipeline()">
-              <span id="launchBtnLabel">Start project</span>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <span class="ic-char-count">
+              <span id="charCount">0</span>
+              <span class="ic-char-max"> / 800</span>
+            </span>
+            <button class="cta-btn" id="launchBtn" onclick="launchPipeline()" type="button">
+              <span id="launchBtnLabel">Start building</span>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
                 <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
                   stroke-linejoin="round" />
               </svg>
@@ -141,26 +167,25 @@
 
   <!-- ═══════════════════════════════════════
      SCREEN: STUDIO (workspace)
-════════════════════════════════════════ -->
+  ════════════════════════════════════════ -->
   <section id="screenStudio" class="screen screen-studio hidden">
 
     <!-- Sidebar -->
     <aside class="studio-sidebar" id="studioSidebar">
-
-      <!-- Project -->
+      <!-- Project info -->
       <div class="sb-project">
         <div class="sb-proj-name" id="sbProjName">—</div>
         <div class="sb-proj-status" id="sbProjStatus">
-          <span class="status-dot" id="sbStatusDot"></span>
+          <span class="status-indicator" id="sbStatusDot"></span>
           <span id="sbStatusLabel">Initializing</span>
         </div>
       </div>
 
-      <!-- Pipeline stage list -->
+      <!-- Pipeline stages -->
       <div class="sb-section-label">Pipeline</div>
-      <nav class="sb-nav" id="sbNav">
-        <button class="sb-item active" data-view="overview" onclick="switchView('overview')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
+      <nav class="sb-nav" id="sbNav" aria-label="Pipeline stages">
+        <button class="sb-item active" data-view="overview" onclick="switchView('overview')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
             <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
             <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2" />
@@ -174,24 +199,31 @@
       </nav>
 
       <div class="sb-section-label">Project</div>
-      <nav class="sb-nav">
-        <button class="sb-item" data-view="artifacts" onclick="switchView('artifacts')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
+      <nav class="sb-nav" aria-label="Project views">
+        <button class="sb-item" data-view="artifacts" onclick="switchView('artifacts')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M3 2h7l4 4v9H3V2z" stroke="currentColor" stroke-width="1.2" />
             <path d="M10 2v4h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
           </svg>
           Artifacts
         </button>
-        <button class="sb-item" data-view="memory" onclick="switchView('memory')">
-          <svg class="sb-icon" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2" />
-            <path d="M8 5v3.5l2.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+        <button class="sb-item" data-view="github" onclick="switchView('github')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M5 3h6v10H5V3z" stroke="currentColor" stroke-width="1.2" />
+            <path d="M7 5h2v2H7V5z" stroke="currentColor" stroke-width="1.2" />
           </svg>
-          Memory
+          GitHub
+        </button>
+        <button class="sb-item" data-view="models" onclick="switchView('models')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2" />
+            <path d="M5 7h6M5 9.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          </svg>
+          Models
         </button>
       </nav>
 
-      <!-- Activity -->
+      <!-- Activity rail -->
       <div class="sb-section-label sb-activity-label">
         Activity
         <span class="sb-activity-count" id="sbActivityCount">0</span>
@@ -201,9 +233,8 @@
       </div>
     </aside>
 
-    <!-- Main content -->
+    <!-- Main content area -->
     <main class="studio-main" id="studioMain">
-      <!-- Views injected by JS -->
       <div id="view-overview" class="studio-view"></div>
       <div id="view-requirement" class="studio-view hidden"></div>
       <div id="view-design" class="studio-view hidden"></div>
@@ -212,30 +243,32 @@
       <div id="view-review" class="studio-view hidden"></div>
       <div id="view-documentation" class="studio-view hidden"></div>
       <div id="view-artifacts" class="studio-view hidden"></div>
-      <div id="view-memory" class="studio-view hidden"></div>
+      <div id="view-models" class="studio-view hidden"></div>
+<div id="view-github" class="studio-view hidden"></div>
     </main>
   </section>
 
-  <!-- Clarification overlay -->
-  <div class="overlay hidden" id="clarifyOverlay">
+  <!-- ═══════════════════════════════════════
+     CLARIFICATION OVERLAY
+  ════════════════════════════════════════ -->
+  <div class="overlay hidden" id="clarifyOverlay" role="dialog" aria-label="Clarification needed"
+    aria-modal="true">
     <div class="clarify-modal">
-      <div class="cm-badge">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.2" />
-          <path d="M6 3.5v3M6 8v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      <div class="cm-header">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.2" />
+          <path d="M7 4v3.5M7 9.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
         </svg>
-        Clarification needed
+        <span>Clarification needed</span>
       </div>
-      <h2 class="cm-title">Help the agent understand your idea</h2>
-      <p class="cm-sub">Answer in as much detail as you'd like. More context produces better output.</p>
+      <h2 class="cm-title">The agent needs more context</h2>
+      <p class="cm-sub">Answer in detail for better results, or skip to use standard defaults.</p>
       <div class="cm-questions" id="cmQuestions"></div>
       <div class="cm-actions">
-        <button class="ghost-btn-sm" type="button" style="padding: 10px 18px; font-size: 13px;" onclick="skipClarification()">
-          <span>Skip with defaults</span>
-        </button>
-        <button class="cta-btn" onclick="submitClarification()">
+        <button class="btn-ghost" type="button" onclick="skipClarification()">Skip with defaults</button>
+        <button class="cta-btn" type="button" onclick="submitClarification()">
           <span>Continue pipeline</span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
               stroke-linejoin="round" />
           </svg>
@@ -243,6 +276,32 @@
       </div>
     </div>
   </div>
+
+  <!-- ═══════════════════════════════════════
+     MODEL CONFIG OVERLAY
+  ════════════════════════════════════════ -->
+  <div class="overlay hidden" id="modelConfigOverlay" role="dialog" aria-label="Model configuration"
+    aria-modal="true">
+    <div class="model-config-modal">
+      <div class="mcm-header">
+        <h2 class="mcm-title">Model Configuration</h2>
+        <button class="mcm-close" type="button" onclick="closeModelConfig()" aria-label="Close model config">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <p class="mcm-sub">Edit any agent's model ID below. Click <strong>Save Changes</strong> to write to <code>.env</code> and restart the server to apply.</p>
+      <div class="mcm-agents" id="mcmAgents">
+        <!-- Injected by JS -->
+      </div>
+      <div class="mcm-footer">
+        <span class="mcm-note">Provider credentials are never stored in the browser.</span>
+        <button class="mv-save-btn" id="mcmSaveBtn" type="button" onclick="saveModelConfig()">&#128190; Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile sidebar overlay -->
+  <div class="mobile-sidebar-overlay hidden" id="mobileSidebarOverlay"></div>
 
   <script src="mock-data.js"></script>
   <script src="app.js"></script>

@@ -151,6 +151,9 @@ def Review_Agent(state: imports.AgentState) -> dict:
         print("  [Review Agent] Activating deterministic review fallback...")
         response = generate_review_fallback(state)
 
+    # A quality score above 5 is the approval threshold.
+    response.approved = response.overall_score > 5
+
     # If test runner reported explicit test failures, enforce rejection (no false approvals)
     test_results = state.get("test_results", {})
     if not test_results.get("success", True) or test_results.get("failed_tests", 0) > 0:

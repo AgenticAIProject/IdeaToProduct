@@ -85,7 +85,14 @@ def Release_Agent(state: AgentState) -> dict:
             "workflow_status": "released_local",
         }
 
-    repo_url = os.environ.get("GITHUB_REPO_URL") or os.environ.get("GITHUB_REMOTE_URL") or "https://github.com/ShivarajChougala15/temp.git"
+    requested_repo_url = state.get("release_repo_url")
+    repo_url = (
+        str(requested_repo_url).strip()
+        if requested_repo_url
+        else os.environ.get("GITHUB_REPO_URL")
+        or os.environ.get("GITHUB_REMOTE_URL")
+        or "https://github.com/ShivarajChougala15/temp.git"
+    )
     os.environ["GITHUB_REPO_URL"] = repo_url
     os.environ["GITHUB_REMOTE_URL"] = repo_url
 

@@ -1,8 +1,9 @@
 import os
+import re
+import json
 from pathlib import Path
 from State_definition import AgentState
 from dotenv import load_dotenv
-from langchain_openrouter import ChatOpenRouter
 from langchain_ollama import ChatOllama
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -23,73 +24,26 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 # ── Model configuration ──────────────────────────────────────────────────────
-# Agents that run on local Ollama (port 11434)
-# Code and Documentation generate the highest volume of tokens
-OLLAMA_AGENTS = {"code", "documentation"}
+# Every LLM-backed agent uses the local Ollama coding model.
+OLLAMA_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
-# If set, also run test agent on local Ollama instead of OpenRouter Account 2
-if os.environ.get("TEST_ON_OLLAMA", "").lower() in ("true", "1", "yes"):
-    OLLAMA_AGENTS.add("test")
 
-# OpenRouter models. Use an explicit model instead of the dynamic openrouter/free
-# alias so structured-output requests are routed consistently.
-OPENROUTER_DEFAULT_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
-)
-OPENROUTER_MODELS = {
-    "requirement": os.environ.get("REQUIREMENT_MODEL", OPENROUTER_DEFAULT_MODEL),
-    "design":      os.environ.get("DESIGN_MODEL", OPENROUTER_DEFAULT_MODEL),
-    "test":        os.environ.get("TEST_MODEL", OPENROUTER_DEFAULT_MODEL),
-    "review":      os.environ.get("REVIEW_MODEL", OPENROUTER_DEFAULT_MODEL),
-}
-
-# Account 2 handles QA & Governance (Test, Review)
-# Account 1 handles Upstream Planning (Requirement, Design)
-OPENROUTER_ACCOUNT_2_AGENTS = {"test", "review"}
-
-
-def get_llm(agent_type: str = "requirement", max_tokens: int = 2000):
+def get_llm(agent_type: str = "requirement", max_tokens: int = 4000):
     """
-    Model routing:
-      - code, documentation: Local Ollama (qwen2.5-coder:7b)
-      - requirement, design: OpenRouter Account 1 (OPENROUTER_API_KEY)
-      - test, review:        OpenRouter Account 2 (OPENROUTER_API_KEY2)
+    All LLM-backed agents: local Ollama
     """
     if agent_type in OLLAMA_AGENTS:
-        model = OLLAMA_MODEL
-        if agent_type == "code":
-            model = os.environ.get("CODE_MODEL", model)
-        elif agent_type == "test":
-            model = os.environ.get("TEST_MODEL", model)
         return ChatOllama(
-            model=model,
+            model=OLLAMA_MODEL,
             base_url=OLLAMA_BASE_URL,
             num_predict=max_tokens,
         )
-    else:
-        # Route to Account 2 for test & review, Account 1 for requirement & design
-        if agent_type in OPENROUTER_ACCOUNT_2_AGENTS:
-            api_key = (
-                os.environ.get("OPENROUTER_API_KEY2")
-                or os.environ.get("OPENROUTER_API_KEY_2")
-                or os.environ.get("OPENROUTER_API_KEY")
-            )
-        else:
-            api_key = (
-                os.environ.get("OPENROUTER_API_KEY1")
-                or os.environ.get("OPENROUTER_API_KEY_1")
-                or os.environ.get("OPENROUTER_API_KEY")
-            )
 
-        model = OPENROUTER_MODELS.get(agent_type, OPENROUTER_DEFAULT_MODEL)
-
-        return ChatOpenRouter(
-            model=model,
-            max_tokens=max_tokens,
-            openrouter_api_key=api_key,
-        )
+    raise ValueError(
+        f"Unknown agent type '{agent_type}'. Expected one of: {sorted(OLLAMA_AGENTS)}"
+    )
 
 
 def load_prompt(filename: str) -> str:
@@ -101,38 +55,113 @@ def load_prompt(filename: str) -> str:
 T = TypeVar("T", bound=BaseModel)
 
 
+def _json_schema_hint(schema: Type[BaseModel]) -> str:
+    """Build a compact JSON schema hint to inject into a prompt fallback."""
+    try:
+        return json.dumps(schema.model_json_schema(), indent=2)
+    except Exception:
+        return str(schema)
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """Extract the first JSON object from raw model text."""
+    # Direct parse
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # Strip markdown fences
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+    if fenced:
+        try:
+            return json.loads(fenced.group(1))
+        except Exception:
+            pass
+    # First { ... } block
+    brace = re.search(r"(\{[\s\S]*\})", text)
+    if brace:
+        try:
+            return json.loads(brace.group(1))
+        except Exception:
+            pass
+    raise ValueError(f"No valid JSON found in model output:\n{text[:500]}")
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Identify provider or model-pool rate limits before retrying needlessly."""
+    status_code = getattr(exc, "status_code", None)
+    details = str(exc).lower()
+    return status_code == 429 or "too many requests" in details or "rate-limited" in details
+
+
+def _rate_limit_message(exc: Exception) -> str:
+    data = getattr(exc, "data", None)
+    metadata = getattr(data, "metadata", None)
+    raw = getattr(metadata, "raw", None) if metadata else None
+    detail = raw or str(exc)
+    return (
+        "OpenRouter rate limit for google/gemma-4-26b-a4b-it:free. "
+        f"{detail}"
+    )
+
+
 def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 3) -> T:
     """
-    llm.with_structured_output(schema).invoke() is typed as returning `dict | BaseModel`.
-    Normalise it to exactly `schema`, so type checkers (and later code) see the right type,
-    and a provider that returns a plain dict still works.
-    Retries up to max_retries times if the model returns None (common with free-tier models).
+    Try native structured output first, then ask the same model for plain JSON.
+    The JSON path supports models that do not implement tool calling.
     """
-    structured_llm = llm.with_structured_output(schema)
     last_err = None
+    schema_hint = _json_schema_hint(schema)
+    fallback_instruction = SystemMessage(content=(
+        "IMPORTANT: You must respond with ONLY a valid JSON object matching "
+        "the schema below. No explanation, no markdown, no code fences — "
+        f"just the raw JSON object.\n\nSchema:\n{schema_hint}"
+    ))
+    fallback_messages = [fallback_instruction] + list(messages)
+
+    model_name = getattr(llm, "model", "") or getattr(llm, "model_name", "llm")
+    print(f"  [invoke_structured] Trying model: {model_name}")
+
+    try:
+        structured_llm = llm.with_structured_output(schema)
+        for attempt in range(max_retries):
+            try:
+                result: Any = structured_llm.invoke(messages)
+                if isinstance(result, schema):
+                    return result
+                if isinstance(result, dict):
+                    return schema.model_validate(result)
+                last_err = ValueError("Structured output was empty or invalid.")
+            except TypeError:
+                raise
+            except Exception as exc:
+                if _is_rate_limit_error(exc):
+                    raise RuntimeError(_rate_limit_message(exc)) from exc
+                last_err = exc
+                print(f"  [invoke_structured] native attempt {attempt + 1}/{max_retries} failed: {exc}")
+    except Exception as exc:
+        if _is_rate_limit_error(exc):
+            raise RuntimeError(_rate_limit_message(exc)) from exc
+        last_err = exc
+        print(f"  [invoke_structured] native strategy unavailable: {exc}")
+
+    print(f"  [invoke_structured] Falling back to JSON prompt mode for {schema.__name__}...")
     for attempt in range(max_retries):
         try:
-            result: Any = structured_llm.invoke(messages)
-            if result is None:
-                print(f"  [invoke_structured] {schema.__name__} returned None (attempt {attempt + 1}/{max_retries}), retrying...")
-                continue
-            if isinstance(result, schema):
-                return result
-            if isinstance(result, dict):
-                return schema.model_validate(result)
-            raise TypeError(f"Structured output for {schema.__name__} came back as {type(result).__name__}, not a valid object.")
-        except TypeError:
-            raise
-        except Exception as e:
-            last_err = e
-            print(f"  [invoke_structured] {schema.__name__} error (attempt {attempt + 1}/{max_retries}): {e}")
-            continue
-    raise RuntimeError(f"Structured output for {schema.__name__} failed after {max_retries} attempts. Last error: {last_err}")
+            raw = llm.invoke(fallback_messages)
+            text = raw.content if hasattr(raw, "content") else str(raw)
+            return schema.model_validate(_extract_json_from_text(text))
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                raise RuntimeError(_rate_limit_message(exc)) from exc
+            last_err = exc
+            print(f"  [invoke_structured] JSON fallback attempt {attempt + 1}/{max_retries} failed: {exc}")
+
+    raise RuntimeError(
+        f"Structured output for {schema.__name__} failed after native and JSON strategies. "
+        f"Last error: {last_err}"
+    )
 
 
 def invoke_and_parse(llm, messages, schema):
-    structured_llm = llm.with_structured_output(
-        schema,
-        method="json_schema",
-    )
-    return structured_llm.invoke(messages)
+    return invoke_structured(llm, schema, messages)

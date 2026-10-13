@@ -14,10 +14,38 @@ sys.path.append(str(ROOT_DIR / "Agents"))
 
 from Agents.State_definition import AgentState
 from Agents.graph import graph
+from Agents.ReleaseAgent import Release_Agent
 
 # In-memory sessions store
 sessions = {}
 sessions_lock = threading.Lock()
+
+
+def run_release_thread(session_id: str, repo_url: str):
+    """Run an explicit user-approved release for a completed pipeline session."""
+    try:
+        with sessions_lock:
+            session = sessions[session_id]
+            release_state = dict(session.get("result") or {})
+            release_state["approval_status"] = "approved"
+            release_state["release_repo_url"] = repo_url
+            session["is_running"] = True
+            session["status"] = "running"
+            session["stage"] = "release"
+            session["error"] = None
+
+        release_update = Release_Agent(release_state)
+        with sessions_lock:
+            release_state.update(release_update)
+            sessions[session_id]["result"] = release_state
+            sessions[session_id]["is_running"] = False
+            sessions[session_id]["stage"] = "release"
+            sessions[session_id]["status"] = "done"
+    except Exception as exc:
+        with sessions_lock:
+            sessions[session_id]["is_running"] = False
+            sessions[session_id]["status"] = "error"
+            sessions[session_id]["error"] = str(exc)
 
 
 def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
@@ -34,7 +62,7 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
             sessions[session_id]["error"] = None
 
         if resume_input:
-            result = graph.invoke(resume_input, config=config)
+            graph_input = resume_input
         else:
             initial_state: AgentState = {
                 "project_id": sessions[session_id]["project_id"],
@@ -70,7 +98,27 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 },
                 "approval_status": "pending"
             }
-            result = graph.invoke(initial_state, config=config)
+            graph_input = initial_state
+
+        result = {}
+        for update in graph.stream(graph_input, config=config, stream_mode="updates"):
+            if not isinstance(update, dict):
+                continue
+
+            for node_name, node_update in update.items():
+                if not isinstance(node_update, dict):
+                    continue
+                result.update(node_update)
+                stage = node_update.get("current_stage", node_name)
+                workflow_status = node_update.get("workflow_status", "running")
+                with sessions_lock:
+                    sessions[session_id]["stage"] = stage
+                    sessions[session_id]["result"] = dict(result)
+                    if workflow_status == "waiting_for_user":
+                        sessions[session_id]["status"] = "clarification"
+
+        if not result:
+            raise RuntimeError("Pipeline produced no agent updates.")
 
         with sessions_lock:
             stage = result.get("current_stage", "documentation")
@@ -98,6 +146,11 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND_DIR), **kwargs)
 
+    def end_headers(self):
+        if self.path.split("?", 1)[0].endswith((".html", ".js", ".css")):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        super().end_headers()
+
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -111,6 +164,22 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        # Handle /api/models GET — return current model config
+        if path == "/api/models":
+            env_path = ROOT_DIR / ".env"
+            env_models = {}
+            if env_path.exists():
+                for line in env_path.read_text().splitlines():
+                    if line.startswith("MODEL_") and "=" in line:
+                        key, _, val = line.partition("=")
+                        env_models[key.strip()] = val.strip()
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "models": env_models}).encode("utf-8"))
+            return
 
         # Handle API status polling: /api/status/<session_id>
         if path.startswith("/api/status/"):
@@ -253,9 +322,49 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "resumed", "session_id": session_id}).encode("utf-8"))
             return
 
+        elif path == "/api/release":
+            session_id = body.get("session_id")
+            repo_url = str(body.get("repo_url", "")).strip()
+            with sessions_lock:
+                session = sessions.get(session_id)
+                if not session:
+                    self.send_response(404)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Session not found"}).encode("utf-8"))
+                    return
+                if session.get("is_running"):
+                    self.send_response(409)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Pipeline is still running"}).encode("utf-8"))
+                    return
+                if not repo_url:
+                    repo_url = os.environ.get("GITHUB_REPO_URL", "")
+                if not repo_url:
+                    self.send_response(400)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Repository URL is required"}).encode("utf-8"))
+                    return
+
+            worker = threading.Thread(target=run_release_thread, args=(session_id, repo_url), daemon=True)
+            worker.start()
+            self.send_response(202)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "release_started", "session_id": session_id}).encode("utf-8"))
+            return
+
         self.send_response(404)
         self._send_cors_headers()
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
+        self.wfile.write(json.dumps({"ok": False, "error": f"Unknown endpoint: {path}"}).encode("utf-8"))
 
 
 def run_server(port=8000):
