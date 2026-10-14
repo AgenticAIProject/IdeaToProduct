@@ -126,8 +126,13 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
     # ---------------------------------------------------------
 
     if clarification_check.needs_clarification:
+        questions = clarification_check.questions[:1]
+        if not questions:
+            questions = [
+                "What is the primary user workflow or outcome this product must support?"
+            ]
         return {
-            "clarification_questions": clarification_check.questions[:1],  # prompt says 1/round; small models ignore it
+            "clarification_questions": questions,
             "clarification_round":     state["clarification_round"] + 1,
             "current_stage":           "clarification",
             "workflow_status":         "waiting_for_user"

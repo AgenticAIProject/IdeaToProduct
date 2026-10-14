@@ -22,6 +22,7 @@ const State = {
   sessionId: null,
   projectId: null,
   projectName: 'Untitled',
+  idea: '',
   githubRepo: '',
   currentView: 'overview',
   pollTimer: null,
@@ -62,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireCharCount();
   wireModelConfigButtons();
   wireMobileMenu();
+  wireSidebarResize();
 });
 
 function navScrollEffect() {
@@ -106,6 +108,26 @@ function wireMobileMenu() {
       overlay.classList.add('hidden');
     });
   }
+
+}
+
+function wireSidebarResize() {
+  const handle = $('sidebarResizeHandle');
+  if (!handle) return;
+  handle.addEventListener('pointerdown', event => {
+    if (window.innerWidth <= 800) return;
+    handle.setPointerCapture(event.pointerId);
+    const move = moveEvent => {
+      const width = Math.max(190, Math.min(420, moveEvent.clientX));
+      document.documentElement.style.setProperty('--sb-w', `${width}px`);
+    };
+    const stop = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', stop);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', stop);
+  });
 }
 
 /* ═════════════════════════════════════════════════
@@ -144,6 +166,7 @@ window.launchPipeline = async function () {
 
     State.sessionId = data.session_id;
     State.projectId = data.project_id;
+    State.idea = idea;
     State.projectName = deriveProjectName(idea);
     State.isLive = true;
     State.pipelineData = null;
@@ -339,6 +362,8 @@ function populateLiveViews(result) {
     renderReviewView(result.review, result.approval_status);
   if (result.documentation && Object.keys(result.documentation).length)
     renderDocsView(result.documentation);
+  if (result.token_usage)
+    renderTokenUsageView(result.token_usage);
 }
 
 /* ═════════════════════════════════════════════════
@@ -369,8 +394,11 @@ function showClarifyOverlay(questions) {
   const cont = $('cmQuestions');
   if (!overlay || !cont) return;
   cont.innerHTML = '';
+  const visibleQuestions = Array.isArray(questions) && questions.length
+    ? questions
+    : ['What is the primary user workflow or outcome this product must support?'];
 
-  questions.forEach((q, i) => {
+  visibleQuestions.forEach((q, i) => {
     const qText = typeof q === 'string' ? q : (q.question || q.text || 'Clarification Question');
     const presets = (Array.isArray(q.options) && q.options.length) ? q.options : getQuestionPresetOptions(qText);
 
@@ -702,6 +730,9 @@ function renderViewIfNeeded(viewId) {
         renderEmptyView(el, 'Documentation', 'Documentation will appear once the documentation agent completes.');
       }
       break;
+    case 'usage':
+      renderTokenUsageView(d?.token_usage || {});
+      break;
     case 'artifacts':
       if (d) {
         renderArtifactsViewLive(d);
@@ -710,6 +741,7 @@ function renderViewIfNeeded(viewId) {
       } else {
         renderEmptyView(el, 'Artifacts', 'Artifacts will appear as the pipeline produces outputs.');
       }
+
       break;
     case 'models':
         renderModelsView();
@@ -718,6 +750,47 @@ function renderViewIfNeeded(viewId) {
         renderGitHubView();
         break;
   }
+  el.dataset.rendered = '1';
+}
+
+function renderTokenUsageView(usage) {
+  const el = $('view-usage');
+  if (!el) return;
+  const entries = Object.entries(usage || {});
+  const total = entries.reduce((sum, [, item]) => sum + (item.total_tokens || 0), 0);
+  el.innerHTML = `
+    <div class="view-hd">
+      <div class="view-breadcrumb">Project</div>
+      <div class="view-title">Token Usage</div>
+      <div class="view-sub">LLM usage is updated after each agent completes.</div>
+    </div>
+    <div class="ov-grid">
+      <div class="ov-card">
+        <div class="ov-card-label">Total Tokens</div>
+        <div class="ov-card-val">${total.toLocaleString()}</div>
+        <div class="ov-card-sub">All completed agents</div>
+      </div>
+      <div class="ov-card">
+        <div class="ov-card-label">Agents Completed</div>
+        <div class="ov-card-val">${entries.length} / ${STAGE_DEFS.length}</div>
+        <div class="ov-card-sub">Usage appears stage by stage</div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Usage by Agent</div>
+      <div class="token-usage-table">
+        ${STAGE_DEFS.map(def => {
+          const item = usage[def.id];
+          return `<div class="token-row">
+            <div class="token-agent">${escHtml(def.label)}</div>
+            <div class="token-model">${escHtml(item?.model || 'Waiting')}</div>
+            <div class="token-value">${item ? `${(item.total_tokens || 0).toLocaleString()} total` : 'Not completed'}</div>
+            <div class="token-detail">${item ? `${(item.input_tokens || 0).toLocaleString()} in · ${(item.output_tokens || 0).toLocaleString()} out · ${item.calls || 0} call${item.calls === 1 ? '' : 's'}` : '—'}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
   el.dataset.rendered = '1';
 }
 
@@ -747,6 +820,10 @@ function renderOverview(data) {
   const mock = window.MockData || {};
   const isComplete = State.isLive && State.pipelineData;
   const elapsed = State.startTime ? formatElapsed(Date.now() - State.startTime) : '—';
+  const requirements = State.pipelineData?.requirements || {};
+  const problemStatement = requirements.problem_statement
+    || (State.isLive ? State.idea : '')
+    || 'Your submitted idea will appear here while requirements are generated.';
 
   // Determine pipeline stages display
   let pipeline;
@@ -780,10 +857,16 @@ function renderOverview(data) {
   el.innerHTML = `
     <div class="view-hd">
       <div class="view-breadcrumb">Project</div>
-      <div class="view-title">${escHtml(State.projectName || 'Overview')}</div>
+      <div class="view-title">Project Overview</div>
       <div class="view-sub">${State.isLive
         ? (isComplete ? 'Pipeline complete. Review the outputs below.' : 'Pipeline is running…')
         : 'Demo mode — showing sample data.'}</div>
+    </div>
+
+    <div class="ov-problem-card">
+        <div class="ov-card-label">Problem Statement</div>
+        <div class="ov-problem-text">${escHtml(problemStatement)}</div>
+        ${requirements.problem_statement ? '' : '<div class="ov-card-sub">Based on your submitted idea; the Requirements Agent will refine it.</div>'}
     </div>
 
     ${isComplete ? `
@@ -873,7 +956,7 @@ function renderRequirementsView(req) {
         <div class="req-story">
           <div class="req-story-id">${escHtml(typeof s === 'string' ? '' : s.id || '')}</div>
           <div class="req-story-body">
-            ${typeof s === 'string' ? escHtml(s) : `As a <strong>${escHtml(s.role || 'user')}</strong>, I want to <strong>${escHtml(s.want || '')}</strong> so that ${escHtml(s.so_that || '')}.`}
+            ${typeof s === 'string' ? escHtml(s) : renderUserStory(s)}
           </div>
         </div>
       `).join('')}
@@ -910,6 +993,16 @@ function renderRequirementsView(req) {
     </div>` : ''}
   `;
   el.dataset.rendered = '1';
+}
+
+function renderUserStory(story) {
+  // RequirementsList uses actor/story; keep fallback support for older payloads.
+  if (story.story) return escHtml(story.story);
+
+  const actor = story.actor || story.role || 'user';
+  const want = story.want || '';
+  const benefit = story.so_that || '';
+  return `As a <strong>${escHtml(actor)}</strong>, I want to <strong>${escHtml(want)}</strong>${benefit ? ` so that ${escHtml(benefit)}.` : '.'}`;
 }
 
 function renderInOutScope(req) {
@@ -977,7 +1070,15 @@ function renderDesignView(design) {
 
     ${design.edge_cases?.length ? `<div class="sec">
       <div class="sec-title">Edge Cases</div>
-      <ul class="req-list">${design.edge_cases.map(e => `<li>${escHtml(displayText(e))}</li>`).join('')}</ul>
+      <div class="edge-case-list">${design.edge_cases.map((edge, index) => {
+        const item = typeof edge === 'string' ? { description: edge } : edge;
+        return `<div class="edge-case-card">
+          <div class="edge-case-id">${escHtml(item.id || `EDGE-${String(index + 1).padStart(2, '0')}`)}</div>
+          <div class="edge-case-description">${escHtml(displayText(item.description || item))}</div>
+          ${item.requirement_ids?.length ? `<div class="edge-case-meta">Requirements: ${item.requirement_ids.map(id => `<span class="comp-dep-tag">${escHtml(id)}</span>`).join('')}</div>` : ''}
+          ${item.component_ids?.length ? `<div class="edge-case-meta">Components: ${item.component_ids.map(id => `<span class="comp-dep-tag">${escHtml(id)}</span>`).join('')}</div>` : ''}
+        </div>`;
+      }).join('')}</div>
     </div>` : ''}
   `;
   el.dataset.rendered = '1';
@@ -1046,12 +1147,14 @@ window.selectCodeFile = function (fileEl) {
 function renderTestsView(tests) {
   const el = $('view-test');
   if (!el) return;
-  const cases = tests.cases || [];
+  const cases = tests.cases || tests.test_cases || [];
+  const total = tests.total_tests ?? tests.total ?? 0;
   const passed = tests.passed ?? tests.passed_tests ?? 0;
   const failed = tests.failed ?? tests.failed_tests ?? 0;
   const errors = Array.isArray(tests.errors) ? tests.errors.length : (tests.errors ?? 0);
   const output = tests.output ?? tests.raw_output ?? '';
-  const testStatus = tests.status ?? (tests.success ? 'pass' : 'fail');
+  const testStatus = tests.status ?? (tests.success ? 'pass' : tests.execution_status || 'fail');
+  const duration = tests.duration ?? tests.duration_seconds;
 
   el.innerHTML = `
     <div class="view-hd">
@@ -1063,19 +1166,25 @@ function renderTestsView(tests) {
         <div class="tsn"><div class="tsn-val tag-green">${passed}</div><div class="tsn-lbl">Passed</div></div>
         <div class="tsn"><div class="tsn-val tag-red">${failed}</div><div class="tsn-lbl">Failed</div></div>
         <div class="tsn"><div class="tsn-val" style="color:var(--amber)">${errors}</div><div class="tsn-lbl">Errors</div></div>
-        ${tests.duration ? `<div class="tsn"><div class="tsn-val" style="font-size:22px;color:var(--text-dim)">${escHtml(tests.duration)}</div><div class="tsn-lbl">Duration</div></div>` : ''}
+        <div class="tsn"><div class="tsn-val" style="font-size:22px;color:var(--text-dim)">${escHtml(String(total))}</div><div class="tsn-lbl">Total</div></div>
+        ${duration !== undefined && duration !== null ? `<div class="tsn"><div class="tsn-val" style="font-size:22px;color:var(--text-dim)">${escHtml(`${duration}s`)}</div><div class="tsn-lbl">Duration</div></div>` : ''}
       </div>
       <div class="artifact-badge ${testStatus === 'pass' ? 'badge-done' : testStatus === 'fail' ? 'badge-fail' : 'badge-queue'}">${escHtml(testStatus)}</div>
     </div>
+    ${tests.test_plan ? `<div class="sec"><div class="sec-title">Test Plan</div><p class="test-plan">${escHtml(tests.test_plan)}</p></div>` : ''}
+    ${Array.isArray(tests.errors) && tests.errors.length ? `<div class="sec">
+      <div class="sec-title">Errors</div>
+      <ul class="req-list">${tests.errors.map(error => `<li>${escHtml(String(error))}</li>`).join('')}</ul>
+    </div>` : ''}
     ${cases.length ? `<div class="sec">
       <div class="sec-title">Test Cases</div>
       <div class="test-cases">
         ${cases.map(tc => `
           <div class="tc" onclick="toggleTestCase(this)">
-            <div class="tc-status ${tc.status === 'pass' ? 'tc-pass' : 'tc-fail'}">${tc.status === 'pass' ? '✓' : '✕'}</div>
+            <div class="tc-status ${tc.status === 'pass' ? 'tc-pass' : tc.status === 'fail' ? 'tc-fail' : 'tc-pending'}">${tc.status === 'pass' ? '✓' : tc.status === 'fail' ? '✕' : '•'}</div>
             <div class="tc-id">${escHtml(tc.id || '')}</div>
-            <div class="tc-name">${escHtml(tc.name || '')}</div>
-            <div class="tc-expect">${escHtml(tc.expected || '')} → ${escHtml(tc.actual || '')}</div>
+            <div class="tc-name">${escHtml(tc.name || tc.description || '')}</div>
+            <div class="tc-expect">${escHtml(tc.expected || tc.acceptance_criterion_id || '')}${tc.actual ? ` → ${escHtml(tc.actual)}` : ''}</div>
           </div>
           ${tc.status !== 'pass' && tc.logs ? `
             <div class="tc-detail hidden">
@@ -1106,14 +1215,16 @@ function renderReviewView(review, approvalStatus) {
   if (!el) return;
   const checks = review.checks || [];
   const findings = review.findings || [];
-  const approved = approvalStatus === 'approved';
+  const approved = approvalStatus === 'approved' || (approvalStatus === undefined && review.approved === true);
+  const rejected = approvalStatus === 'rejected' || (approvalStatus === undefined && review.approved === false);
+  const verdictLabel = approved ? '✓ Approved' : rejected ? '✕ Rejected' : '⚠ Pending Review';
 
   el.innerHTML = `
     <div class="view-hd">
       <div class="view-breadcrumb">Pipeline · Stage 05</div>
       <div class="view-title">Quality Gate</div>
-      <div class="artifact-badge ${approved ? 'badge-done' : 'badge-warn'}" style="margin-top:8px">
-        ${approved ? '✓ Approved' : '⚠ Pending Review'}
+      <div class="artifact-badge ${approved ? 'badge-done' : rejected ? 'badge-fail' : 'badge-warn'}" style="margin-top:8px">
+        ${verdictLabel}
       </div>
     </div>
 
@@ -1170,18 +1281,53 @@ function renderDocsView(docs) {
     <div class="view-hd">
       <div class="view-breadcrumb">Pipeline · Stage 06</div>
       <div class="view-title">Documentation</div>
+      <button class="btn-ghost doc-export-btn" type="button" onclick="exportDocumentation()">
+        ↓ Export documentation
+      </button>
     </div>
     <div class="doc-prose">
-      ${docs.overview ? `<h3>Overview</h3><p>${escHtml(docs.overview)}</p>` : ''}
-      ${docs.getting_started ? `<h3>Getting Started</h3><pre>${escHtml(docs.getting_started)}</pre>` : ''}
-      ${docs.features?.length ? `<h3>Features</h3><ul>${docs.features.map(f => `<li>${escHtml(displayText(f))}</li>`).join('')}</ul>` : ''}
-      ${docs.api_reference ? `<h3>API Reference</h3><p>${escHtml(docs.api_reference)}</p>` : ''}
-      ${docs.architecture ? `<h3>Architecture</h3><p>${escHtml(docs.architecture)}</p>` : ''}
-      ${docs.known_limitations?.length ? `<h3>Known Limitations</h3><ul>${docs.known_limitations.map(l => `<li>${escHtml(displayText(l))}</li>`).join('')}</ul>` : ''}
+      ${docs.readme ? `<h3>README</h3><pre>${escHtml(docs.readme)}</pre>` : ''}
+      ${docs.api_reference ? `<h3>API Reference</h3><pre>${escHtml(docs.api_reference)}</pre>` : ''}
+      ${docs.architecture_overview ? `<h3>Architecture</h3><pre>${escHtml(docs.architecture_overview)}</pre>` : ''}
+      ${docs.user_guide ? `<h3>User Guide</h3><pre>${escHtml(docs.user_guide)}</pre>` : ''}
+      ${docs.changelog ? `<h3>Changelog</h3><pre>${escHtml(docs.changelog)}</pre>` : ''}
     </div>
   `;
   el.dataset.rendered = '1';
 }
+
+window.exportDocumentation = function () {
+  const docs = State.pipelineData?.documentation;
+  if (!docs) return;
+
+  const sections = [
+    ['README', docs.readme],
+    ['API Reference', docs.api_reference],
+    ['Architecture', docs.architecture_overview],
+    ['User Guide', docs.user_guide],
+    ['Changelog', docs.changelog],
+  ].filter(([, content]) => typeof content === 'string' && content.trim());
+
+  if (!sections.length) return;
+
+  const content = sections
+    .map(([title, body]) => `# ${title}\n\n${body.trim()}`)
+    .join('\n\n---\n\n') + '\n';
+
+  const projectName = (State.projectName || 'project')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'project';
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${projectName}-documentation.md`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
 
 /* ── Artifacts ───────────────────────────── */
 function renderArtifactsView(artifacts) {
@@ -1284,7 +1430,7 @@ function renderModelsView() {
     <div class="models-view-grid">
       ${STAGE_DEFS.map(def => {
     const cfg = MODEL_CONFIG[def.id] || {};
-    const isOllama = cfg.provider === 'Ollama';
+    const isOllama = !cfg.model || cfg.provider === 'Ollama';
     return `
           <div class="mv-agent-card">
             <div class="mv-agent-left">
@@ -1324,9 +1470,7 @@ window.saveModelsView = async function () {
   const updated = {};
   STAGE_DEFS.forEach(def => {
     const input = $(`mv-input-${def.id}`);
-    if (input && input.value.trim()) {
-      updated[def.id] = input.value.trim();
-    }
+    updated[def.id] = input ? input.value.trim() : '';
   });
 
   const saveBtn = $('mvSaveBtn');
@@ -1334,7 +1478,7 @@ window.saveModelsView = async function () {
   if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
 
   try {
-    const res = await fetch('/api/models', {
+    const res = await fetch('/api/models/runtime', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ models: updated })
@@ -1345,7 +1489,7 @@ window.saveModelsView = async function () {
         if (MODEL_CONFIG[agentId]) MODEL_CONFIG[agentId].model = modelId;
       });
       if (saveBtn) { saveBtn.textContent = '✓ Saved!'; }
-      if (note) { note.textContent = 'Models saved to .env — restart server to apply.'; note.style.color = '#4ade80'; }
+      if (note) { note.textContent = 'Runtime models updated. Changes apply to the next agent call.'; note.style.color = '#4ade80'; }
       setTimeout(() => {
         if (saveBtn) { saveBtn.textContent = '💾 Save All Models'; saveBtn.disabled = false; }
       }, 2000);
@@ -1487,10 +1631,17 @@ function renderGitHubView() {
         statusEl.innerHTML = `<span class="gh-status-badge gh-status-running"><span class="gh-spinner"></span> Pushing to ${escHtml(repo)}…</span>`;
       }
 
+      const token = $('githubTokenInput')?.value.trim() || '';
+      const commitMessage = $('githubCommitMsg')?.value.trim() || '';
       fetch(`${API}/api/release`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: State.sessionId, repo_url: repo })
+        body: JSON.stringify({
+          session_id: State.sessionId,
+          repo_url: repo,
+          github_token: token,
+          commit_message: commitMessage,
+        })
       }).then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Release failed');
@@ -1526,7 +1677,7 @@ function openModelConfig() {
 
   cont.innerHTML = STAGE_DEFS.map(def => {
     const cfg = MODEL_CONFIG[def.id] || {};
-    const isOllama = cfg.provider === 'Ollama';
+    const isOllama = !cfg.model || cfg.provider === 'Ollama';
     return `
       <div class="mcm-agent">
         <div class="mcm-agent-info">
@@ -1546,7 +1697,7 @@ function openModelConfig() {
             value="${escHtml(cfg.model || '')}"
             placeholder="e.g. google/gemma-4-26b-a4b-it:free"
             title="Enter the model ID to use for the ${escHtml(def.label)} agent" />
-          <div class="mcm-ui-note">Edit and click Save Changes to apply</div>
+          <div class="mcm-ui-note">Leave empty to use the Ollama default. Changes apply to the next agent call.</div>
         </div>
       </div>
     `;
@@ -1563,16 +1714,14 @@ window.saveModelConfig = async function () {
   const updated = {};
   STAGE_DEFS.forEach(def => {
     const input = $(`mcm-input-${def.id}`);
-    if (input && input.value.trim()) {
-      updated[def.id] = input.value.trim();
-    }
+    updated[def.id] = input ? input.value.trim() : '';
   });
 
   const saveBtn = $('mcmSaveBtn');
   if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
 
   try {
-    const res = await fetch('/api/models', {
+    const res = await fetch('/api/models/runtime', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ models: updated })
@@ -1583,7 +1732,7 @@ window.saveModelConfig = async function () {
       Object.entries(updated).forEach(([agentId, modelId]) => {
         if (MODEL_CONFIG[agentId]) MODEL_CONFIG[agentId].model = modelId;
       });
-      if (saveBtn) { saveBtn.textContent = '✓ Saved'; }
+      if (saveBtn) { saveBtn.textContent = '✓ Saved for next agent'; }
       setTimeout(() => {
         $('modelConfigOverlay')?.classList.add('hidden');
         if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }

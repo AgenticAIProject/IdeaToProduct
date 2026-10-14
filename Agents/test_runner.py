@@ -51,6 +51,7 @@ RUNTIME_IMAGES = {
     "node": "node:20-slim",
     "rust": "rust:1.77-slim",
     "c": "gcc:13",
+    "cpp": "gcc:13",
 }
 
 def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, str]) -> str:
@@ -69,6 +70,8 @@ def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, s
         return RUNTIME_IMAGES["java"]
     if any(p.endswith((".c", ".h")) for p in source_paths):
         return RUNTIME_IMAGES["c"]
+    if any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")) for p in source_paths):
+        return RUNTIME_IMAGES["cpp"]
     if any(p.endswith((".ts", ".tsx", ".js", ".jsx", ".html")) or p == "package.json" for p in source_paths):
         if not any(p.endswith(".py") for p in source_paths):
             return RUNTIME_IMAGES["node"]
@@ -202,7 +205,7 @@ def _detect_framework(test_files: Dict[str, str]) -> str | None:
         fn_lower = filename.lower()
 
         # Polyglot test frameworks
-        if fn_lower.endswith(".c"):
+        if fn_lower.endswith((".c", ".cpp", ".cc", ".cxx")):
             return "c"
         if fn_lower.endswith("_test.go") or 'import "testing"' in content:
             return "go"
@@ -275,12 +278,12 @@ def _build_run_cmd(
         elif framework == "c":
             project_sources = [
                 fn for fn in (source_files or [])
-                if fn.lower().endswith(".c")
+                if fn.lower().endswith((".c", ".cpp", ".cc", ".cxx"))
                 and not re.search(r"\bmain\s*\(", (source_contents or {}).get(fn, ""))
             ]
-            test_sources = [fn for fn in test_files if fn.lower().endswith(".c")]
+            test_sources = [fn for fn in test_files if fn.lower().endswith((".c", ".cpp", ".cc", ".cxx"))]
             if not test_sources:
-                raise ValueError("C test suite must include a .c test harness.")
+                raise ValueError("C/C++ test suite must include a C/C++ test harness.")
             compile_sources = sorted(set(project_sources + test_sources))
             compile_list = " ".join(shlex.quote(path) for path in compile_sources)
             include_dirs = {"/app"}
@@ -290,7 +293,9 @@ def _build_run_cmd(
                 if os.path.dirname(path)
             )
             include_flags = " ".join(f"-I {shlex.quote(path)}" for path in sorted(include_dirs))
-            parts.append(f"gcc -std=c11 -Wall -Wextra {include_flags} -o /tmp/test_binary {compile_list} && /tmp/test_binary")
+            compiler = "g++" if any(path.lower().endswith((".cpp", ".cc", ".cxx")) for path in compile_sources) else "gcc"
+            standard = "-std=c++17" if compiler == "g++" else "-std=c11"
+            parts.append(f"{compiler} {standard} -Wall -Wextra {include_flags} -o /tmp/test_binary {compile_list} && /tmp/test_binary")
         else:
             js_files = [fn for fn in test_files.keys() if fn.endswith((".js", ".mjs", ".cjs"))]
             if js_files:

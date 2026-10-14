@@ -5,19 +5,19 @@ from State_definition import AgentState
 
 class DocumentationDocument(BaseModel):
     readme: str = Field(
-        description="Comprehensive project README in Markdown. Includes Overview, Key Features, Setup & Installation, Quickstart Guide, and Testing Instructions."
+        description="Comprehensive project README in Markdown. Include only facts supported by the supplied artifacts: problem statement, V1 features, setup, exact run command, exact test command, testing status, and known issues."
     )
     api_reference: str = Field(
-        description="Detailed API and module reference in Markdown. Documents all endpoints, functions, classes, arguments, and response models."
+        description="Detailed API and module reference in Markdown. Document only endpoints, functions, classes, arguments, and response models visible in the supplied design and source code. For frontend-only projects, document public UI behavior instead of inventing APIs."
     )
     architecture_overview: str = Field(
-        description="Technical architecture document in Markdown. Explains system components, interactions, data models, and decisions."
+        description="Technical architecture document in Markdown. Explain only the supplied components, interactions, data entities, technologies, decisions, and edge cases. Do not invent components or infrastructure."
     )
     user_guide: str = Field(
-        description="User-facing guide organized by target personas (e.g., Students, Recruiters) detailing end-to-end workflows."
+        description="User-facing Markdown guide organized only around the supplied actors and implemented V1 workflows. Do not invent personas or capabilities."
     )
     changelog: str = Field(
-        description="Version 1.0.0 Changelog and release summary in Markdown."
+        description="Markdown V1.0.0 changelog based only on implemented features and actual test/review status. Never claim all tests passed unless test_results confirms it."
     )
 
 
@@ -38,8 +38,14 @@ def Documentation_Agent(state: AgentState) -> dict:
 
     code_files = code_artifact.get("files", [])
     if isinstance(code_files, list):
-        code_summary = "\n".join(
-            [f"- File: `{f.get('path', '')}` ({len(f.get('content', ''))} chars)" for f in code_files if isinstance(f, dict)]
+        code_summary = "\n\n".join(
+            f"""--- File: `{f.get('path', '')}` ---
+Description: {f.get('description', '')}
+Exports: {f.get('exports', [])}
+Requirement IDs: {f.get('requirement_ids', [])}
+Source:
+{(f.get('content') or '')[:12000]}"""
+            for f in code_files if isinstance(f, dict)
         )
     elif isinstance(code_files, dict):
         code_summary = "\n".join(
@@ -49,7 +55,7 @@ def Documentation_Agent(state: AgentState) -> dict:
         code_summary = ""
     code_summary = code_summary or "No code files provided."
 
-    llm = imports.get_llm(agent_type="documentation", max_tokens=2000)
+    llm = imports.get_llm(agent_type="documentation", max_tokens=5000)
 
     doc_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/documentation_prompt.txt"))
 
@@ -67,13 +73,22 @@ def Documentation_Agent(state: AgentState) -> dict:
 === SOURCE CODE FILES ===
 {code_summary}
 
+=== RUN AND TEST COMMANDS ===
+Run command: {code_artifact.get("setup_instructions", "")}
+Test command: {code_artifact.get("test_command", "")}
+Dependencies: {code_artifact.get("dependencies", [])}
+Implementation notes: {code_artifact.get("implementation_notes", [])}
+
 === TEST RESULTS ===
 {test_results}
 
 === REVIEW FINDINGS ===
 {review}
 
-Generate the complete project documentation package.
+Generate the complete project documentation package. Treat the supplied
+requirements, design, source, test results, and review as authoritative.
+Do not fill missing facts with guesses; say "Not specified" or "Not applicable"
+when the artifacts do not provide the information.
 """
     )
 

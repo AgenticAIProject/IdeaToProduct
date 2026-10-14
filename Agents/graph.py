@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END
+import imports
 from State_definition import AgentState
 from RequirementAgent import Requirement_Agent
 from DesignAgent import Design_Agent
@@ -10,31 +11,39 @@ from CodeAgent import Code_Agent
 
 
 def requirement_node(state: AgentState) -> dict:
-    return Requirement_Agent(state)
+    return _run_with_usage("requirement", Requirement_Agent, state)
 
 
 def design_node(state: AgentState) -> dict:
-    return Design_Agent(state)
+    return _run_with_usage("design", Design_Agent, state)
 
 
 def code_node(state: AgentState) -> dict:
-    return Code_Agent(state)
+    return _run_with_usage("code", Code_Agent, state)
 
 
 def test_node(state: AgentState) -> dict:
-    return Test_Agent(state)
+    return _run_with_usage("test", Test_Agent, state)
 
 
 def review_node(state: AgentState) -> dict:
-    return Review_Agent(state)
+    return _run_with_usage("review", Review_Agent, state)
 
 
 def documentation_node(state: AgentState) -> dict:
-    return Documentation_Agent(state)
+    return _run_with_usage("documentation", Documentation_Agent, state)
 
 
 def release_node(state: AgentState) -> dict:
     return Release_Agent(state)
+
+
+def _run_with_usage(agent_type: str, agent, state: AgentState) -> dict:
+    update = agent(state)
+    usage = dict(state.get("token_usage", {}))
+    usage[agent_type] = imports.get_token_usage(agent_type)
+    update["token_usage"] = usage
+    return update
 
 
 def requirement_router(state: AgentState):
@@ -58,11 +67,11 @@ def review_router(state: AgentState):
     if state.get("approval_status") == "approved":
         return "approved"
 
-    # After 3 rework rounds, preserve the artifacts and route them to Documentation.
+    # Code generation runs once per pipeline; preserve the artifacts if review rejects.
     retry_count = state.get("retry_count", {})
     code_retries = retry_count.get("code", 0)
-    if code_retries >= 3:
-        print("  [Review Router] Max rework retries (3) reached without approval. Routing to documentation.")
+    if code_retries >= 1:
+        print("  [Review Router] Code Agent already ran once. Routing rejected artifacts to documentation.")
         return "give_up"
 
     return "rejected"

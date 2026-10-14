@@ -37,6 +37,7 @@ class AgentState(TypedDict):
     # Documentation
     documentation: dict
     documentation_version: int
+    token_usage: dict
 
     # Release
     release: dict

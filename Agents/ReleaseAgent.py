@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import base64
 from pathlib import Path
 from typing import cast
 
@@ -63,7 +64,8 @@ def Release_Agent(state: AgentState) -> dict:
         }
 
     github_token = (
-        os.environ.get("GITHUB_TOKEN")
+        str(state.get("release_github_token", "")).strip()
+        or os.environ.get("GITHUB_TOKEN")
         or os.environ.get("GH_TOKEN")
         or os.environ.get("GITHUB_PAT")
     )
@@ -96,11 +98,6 @@ def Release_Agent(state: AgentState) -> dict:
     os.environ["GITHUB_REPO_URL"] = repo_url
     os.environ["GITHUB_REMOTE_URL"] = repo_url
 
-    # Authenticate repo_url with token if available
-    push_url = repo_url
-    if "https://" in repo_url and "@" not in repo_url and github_token:
-        push_url = repo_url.replace("https://", f"https://x-access-token:{github_token}@")
-
     try:
         if not (project_dir / ".git").exists():
             init_result = _git(project_dir, "init")
@@ -114,11 +111,11 @@ def Release_Agent(state: AgentState) -> dict:
 
         remote_check = _git(project_dir, "remote", "get-url", "origin")
         if remote_check.returncode == 0:
-            set_result = _git(project_dir, "remote", "set-url", "origin", push_url)
+            set_result = _git(project_dir, "remote", "set-url", "origin", repo_url)
             if set_result.returncode != 0:
                 raise RuntimeError(f"git remote set-url failed: {set_result.stderr.strip()}")
         else:
-            add_result = _git(project_dir, "remote", "add", "origin", push_url)
+            add_result = _git(project_dir, "remote", "add", "origin", repo_url)
             if add_result.returncode != 0:
                 raise RuntimeError(f"git remote add failed: {add_result.stderr.strip()}")
 
@@ -128,13 +125,33 @@ def Release_Agent(state: AgentState) -> dict:
 
         status_result = _git(project_dir, "status", "--short")
         if status_result.stdout.strip():
-            commit_result = _git(project_dir, "commit", "-m", "Release approved project")
+            commit_message = (
+                str(state.get("release_commit_message", "")).strip()
+                or "Release approved project"
+            )
+            commit_result = _git(project_dir, "commit", "-m", commit_message)
             if commit_result.returncode != 0:
                 raise RuntimeError(f"git commit failed: {commit_result.stderr.strip() or commit_result.stdout.strip()}")
 
-        push_result = _git(project_dir, "push", "-u", "origin", "HEAD")
+        push_args = ["push", "-u", "origin", "HEAD"]
+        if github_token and repo_url.startswith("https://"):
+            credentials = base64.b64encode(
+                f"x-access-token:{github_token}".encode("utf-8")
+            ).decode("ascii")
+            push_args = [
+                "-c",
+                f"http.extraheader=Authorization: Basic {credentials}",
+                *push_args,
+            ]
+        push_result = _git(project_dir, *push_args)
         if push_result.returncode != 0:
-            raise RuntimeError(f"git push failed: {push_result.stderr.strip() or push_result.stdout.strip()}")
+            push_error = push_result.stderr.strip() or push_result.stdout.strip()
+            if "authentication failed" in push_error.lower() or "403" in push_error:
+                raise RuntimeError(
+                    "GitHub authentication failed. Revoke the exposed token, create a new "
+                    "token with repository Contents read/write permission, and retry."
+                )
+            raise RuntimeError(f"git push failed: {push_error}")
 
         # Successfully pushed to GitHub -> remove project folder from disk
         shutil.rmtree(project_dir)

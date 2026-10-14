@@ -15,13 +15,19 @@ sys.path.append(str(ROOT_DIR / "Agents"))
 from Agents.State_definition import AgentState
 from Agents.graph import graph
 from Agents.ReleaseAgent import Release_Agent
+import imports as agent_imports
 
 # In-memory sessions store
 sessions = {}
 sessions_lock = threading.Lock()
 
 
-def run_release_thread(session_id: str, repo_url: str):
+def run_release_thread(
+    session_id: str,
+    repo_url: str,
+    github_token: str = "",
+    commit_message: str = "",
+):
     """Run an explicit user-approved release for a completed pipeline session."""
     try:
         with sessions_lock:
@@ -29,6 +35,10 @@ def run_release_thread(session_id: str, repo_url: str):
             release_state = dict(session.get("result") or {})
             release_state["approval_status"] = "approved"
             release_state["release_repo_url"] = repo_url
+            if github_token:
+                release_state["release_github_token"] = github_token
+            if commit_message:
+                release_state["release_commit_message"] = commit_message
             session["is_running"] = True
             session["status"] = "running"
             session["stage"] = "release"
@@ -85,6 +95,7 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 "review_version": 0,
                 "documentation": {},
                 "documentation_version": 0,
+                "token_usage": {},
                 "release": {},
                 "release_version": 0,
                 "current_stage": "requirements",
@@ -228,6 +239,26 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
         except Exception:
             body = {}
 
+        if path == "/api/models/runtime":
+            models = body.get("models", {})
+            if not isinstance(models, dict):
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "models must be an object"}).encode("utf-8"))
+                return
+            agent_imports.set_runtime_models({
+                str(agent): str(model)
+                for agent, model in models.items()
+            })
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "message": "Runtime models updated"}).encode("utf-8"))
+            return
+
         if path == "/api/start":
             idea = body.get("idea", "").strip()
             if not idea:
@@ -255,7 +286,6 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     "result": None,
                 }
 
-            # Launch pipeline in background thread
             worker = threading.Thread(
                 target=run_pipeline_thread,
                 args=(session_id, thread_id, None),
@@ -325,6 +355,8 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
         elif path == "/api/release":
             session_id = body.get("session_id")
             repo_url = str(body.get("repo_url", "")).strip()
+            github_token = str(body.get("github_token", "")).strip()
+            commit_message = str(body.get("commit_message", "")).strip()
             with sessions_lock:
                 session = sessions.get(session_id)
                 if not session:
@@ -341,6 +373,16 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": "Pipeline is still running"}).encode("utf-8"))
                     return
+                result = session.get("result") or {}
+                if result.get("approval_status") != "approved":
+                    self.send_response(403)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": "Release requires an approved quality review"
+                    }).encode("utf-8"))
+                    return
                 if not repo_url:
                     repo_url = os.environ.get("GITHUB_REPO_URL", "")
                 if not repo_url:
@@ -351,7 +393,11 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     self.wfile.write(json.dumps({"error": "Repository URL is required"}).encode("utf-8"))
                     return
 
-            worker = threading.Thread(target=run_release_thread, args=(session_id, repo_url), daemon=True)
+            worker = threading.Thread(
+                target=run_release_thread,
+                args=(session_id, repo_url, github_token, commit_message),
+                daemon=True,
+            )
             worker.start()
             self.send_response(202)
             self._send_cors_headers()

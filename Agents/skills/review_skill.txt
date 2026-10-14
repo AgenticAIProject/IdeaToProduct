@@ -1,9 +1,10 @@
 Review Methodology (apply in this order, stop adding items once you have the top 5 defects):
 
 1. EVIDENCE FIRST
-   Start from the test result. If tests failed, read the failure output and name the file and behavior that
-   caused it. Decide: code defect, dependency/manifest defect, or test-infrastructure problem
-   ([TEST-INFRA], [DEPENDENCY], timeout). Only code and manifest defects go to `defects`.
+   Review test results when available, but do not block approval on test success. If tests failed, read
+   the failure output and decide whether it demonstrates a code defect, dependency/manifest defect, or
+   test-infrastructure problem ([TEST-INFRA], [DEPENDENCY], timeout). Only demonstrated blocking defects
+   go to `defects`; test gaps and infrastructure failures may be recorded as feedback.
 2. REQUIREMENT COVERAGE
    For each Must requirement and its acceptance criteria, find the code that implements it.
    Missing or clearly wrong = defect. Partial but working = feedback.

@@ -28,6 +28,90 @@ from pydantic import BaseModel, Field
 OLLAMA_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+_RUNTIME_MODELS: dict[str, str] = {}
+_TOKEN_USAGE: dict[str, dict[str, int | str]] = {}
+
+
+def _usage_from_response(response: Any) -> dict[str, int]:
+    """Read token counters from provider-specific LangChain response metadata."""
+    metadata = getattr(response, "usage_metadata", None) or {}
+    response_metadata = getattr(response, "response_metadata", None) or {}
+    usage = metadata or response_metadata.get("usage", {}) or response_metadata
+
+    def number(*keys: str) -> int:
+        for key in keys:
+            value = usage.get(key) if isinstance(usage, dict) else None
+            if isinstance(value, (int, float)):
+                return int(value)
+        return 0
+
+    input_tokens = number("input_tokens", "prompt_tokens", "prompt_eval_count")
+    output_tokens = number("output_tokens", "completion_tokens", "eval_count")
+    total_tokens = number("total_tokens")
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens or input_tokens + output_tokens,
+    }
+
+
+def _record_token_usage(agent_type: str, response: Any) -> None:
+    usage = _usage_from_response(response)
+    current = _TOKEN_USAGE.setdefault(agent_type, {
+        "model": OLLAMA_MODEL, "calls": 0,
+        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+    })
+    current["calls"] = int(current["calls"]) + 1
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        current[key] = int(current[key]) + usage[key]
+
+
+def get_token_usage(agent_type: str) -> dict:
+    current = _TOKEN_USAGE.get(agent_type)
+    if not current:
+        return {
+            "model": OLLAMA_MODEL, "calls": 0,
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        }
+    return dict(current)
+
+
+class _TrackedRunnable:
+    def __init__(self, runnable: Any, agent_type: str):
+        self._runnable = runnable
+        self._agent_type = agent_type
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        response = self._runnable.invoke(*args, **kwargs)
+        if isinstance(response, dict) and response.get("raw") is not None:
+            _record_token_usage(self._agent_type, response["raw"])
+            return response.get("parsed")
+        _record_token_usage(self._agent_type, response)
+        return response
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runnable, name)
+
+
+class _TrackedLLM:
+    def __init__(self, llm: Any, agent_type: str):
+        self._llm = llm
+        self._agent_type = agent_type
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        response = self._llm.invoke(*args, **kwargs)
+        _record_token_usage(self._agent_type, response)
+        return response
+
+    def with_structured_output(self, *args: Any, **kwargs: Any) -> _TrackedRunnable:
+        kwargs["include_raw"] = True
+        return _TrackedRunnable(
+            self._llm.with_structured_output(*args, **kwargs),
+            self._agent_type,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._llm, name)
 
 
 def get_llm(agent_type: str = "requirement", max_tokens: int = 4000):
@@ -35,15 +119,28 @@ def get_llm(agent_type: str = "requirement", max_tokens: int = 4000):
     All LLM-backed agents: local Ollama
     """
     if agent_type in OLLAMA_AGENTS:
-        return ChatOllama(
-            model=OLLAMA_MODEL,
+        selected_model = _RUNTIME_MODELS.get(agent_type) or OLLAMA_MODEL
+        usage = _TOKEN_USAGE.setdefault(agent_type, {
+            "model": selected_model, "calls": 0,
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        })
+        usage["model"] = selected_model
+        return _TrackedLLM(ChatOllama(
+            model=selected_model,
             base_url=OLLAMA_BASE_URL,
             num_predict=max_tokens,
-        )
+        ), agent_type)
 
     raise ValueError(
         f"Unknown agent type '{agent_type}'. Expected one of: {sorted(OLLAMA_AGENTS)}"
     )
+
+
+def set_runtime_models(models: dict[str, str]) -> None:
+    """Update models used by subsequent agent calls without restarting the server."""
+    for agent_type, model in models.items():
+        if agent_type in OLLAMA_AGENTS:
+            _RUNTIME_MODELS[agent_type] = model.strip() if model.strip() else OLLAMA_MODEL
 
 
 def load_prompt(filename: str) -> str:

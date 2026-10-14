@@ -172,6 +172,7 @@
 
     <!-- Sidebar -->
     <aside class="studio-sidebar" id="studioSidebar">
+      <div class="sidebar-resize-handle" id="sidebarResizeHandle" aria-label="Resize sidebar"></div>
       <!-- Project info -->
       <div class="sb-project">
         <div class="sb-proj-name" id="sbProjName">—</div>
@@ -221,6 +222,12 @@
           </svg>
           Models
         </button>
+        <button class="sb-item" data-view="usage" onclick="switchView('usage')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 12.5V8M6.5 12.5V5M10 12.5V2.5M13 12.5V7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          Token Usage
+        </button>
       </nav>
 
       <!-- Activity rail -->
@@ -244,6 +251,7 @@
       <div id="view-documentation" class="studio-view hidden"></div>
       <div id="view-artifacts" class="studio-view hidden"></div>
       <div id="view-models" class="studio-view hidden"></div>
+      <div id="view-usage" class="studio-view hidden"></div>
 <div id="view-github" class="studio-view hidden"></div>
     </main>
   </section>

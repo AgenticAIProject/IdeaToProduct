@@ -184,6 +184,7 @@ def Test_Agent(state: AgentState) -> dict:
     file_paths = [f.get("path", "").lower() for f in code_files if isinstance(f, dict)]
     is_go = any(p.endswith(".go") or p == "go.mod" for p in file_paths)
     is_java = any(p.endswith((".java", ".jar")) or p == "pom.xml" for p in file_paths)
+    is_cpp = any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")) for p in file_paths)
     is_c = any(p.endswith((".c", ".h")) for p in file_paths)
     is_python = any(p.endswith(".py") or p == "requirements.txt" for p in file_paths)
     is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths) and not is_python
@@ -221,6 +222,15 @@ CRITICAL TESTING INSTRUCTIONS:
 1. Target filename: 'VerificationTest.java'
 2. Use standard org.junit.
 """
+    elif is_cpp:
+        stack_guidelines = """
+=== PROJECT STACK: C++ ===
+CRITICAL TESTING INSTRUCTIONS:
+1. Target filename: 'test_verification.cpp'
+2. Use standard C++ assertions and iostream only unless the source requires another standard header.
+3. Include the real project headers and call the actual functions/classes under test.
+4. Do not generate Python, pytest, or JavaScript tests for a C++ project.
+"""
     elif is_c:
         stack_guidelines = """
 === PROJECT STACK: C ===
@@ -249,6 +259,8 @@ CRITICAL TESTING INSTRUCTIONS:
         default_name, test_command = "verification_test.go", "go test -v ./..."
     elif is_java:
         default_name, test_command = "VerificationTest.java", "mvn test"
+    elif is_cpp:
+        default_name, test_command = "test_verification.cpp", None
     elif is_c:
         default_name, test_command = "test_verification.c", None
     else:
@@ -286,11 +298,13 @@ CRITICAL TESTING INSTRUCTIONS:
     prev_was_test_side = bool(prev.get("test_side_error"))
 
     plan_text, test_name, test_content = "", default_name, ""
+    test_cases = []
 
     # 3a. Keep the same tests across rework loops (moving-target tests => code never converges)
     if REUSE_PREVIOUS_TESTS and prev_tests and not prev_was_test_side:
         test_name, test_content = next(iter(prev_tests.items()))
         plan_text = prev.get("test_plan", "")
+        test_cases = prev.get("test_cases") or []
         print(f"  [Test Agent] Reusing previous test suite '{test_name}' (rework loop).")
     else:
         # 3b. Small structured call for the plan
@@ -300,6 +314,7 @@ CRITICAL TESTING INSTRUCTIONS:
                 imports.HumanMessage(content=base_context + f"\nProduce ONLY the test plan and test case list. Test file name: {default_name}"),
             ])
             plan_text = plan.test_plan
+            test_cases = [case.model_dump() for case in plan.test_cases]
             test_name = default_name   # runner command is built around this name
         except Exception as e:  # noqa: BLE001
             print(f"  [Test Agent] Plan generation failed ({e}); continuing without a plan.")
@@ -360,6 +375,7 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
         "duration_seconds": execution_result["duration_seconds"],
         "test_files": test_files_to_run,
         "test_plan": plan_text,
+        "test_cases": test_cases,
         "test_side_error": bool(test_side),
     }
     if test_side:
