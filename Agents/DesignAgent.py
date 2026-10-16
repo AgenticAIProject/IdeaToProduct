@@ -1,9 +1,10 @@
+import json
 import imports
 from pydantic import BaseModel, Field
 from State_definition import AgentState
 
 class DesignComponent(BaseModel):
-    id: str
+    id: str = Field(description="Unique ID in the form COMP-01, COMP-02, ...")
     name: str
     responsibility: str
     requirement_ids: list[str] = Field(default_factory=list)
@@ -64,7 +65,7 @@ class DesignDocument(BaseModel):
     )
 
     architecture: str = Field(
-        description="High-level architecture description: major parts, responsibilities, and how they interact."
+        description="2-3 full sentences: the major parts, what each is responsible for, and how they interact. Never a single word such as 'Monolithic'."
     )
 
     components: list[DesignComponent] = Field(
@@ -211,6 +212,26 @@ def normalize_design(design: dict, requirements: dict) -> dict:
         if "html" in frontend and design.get("libraries_and_tools"):
             design["libraries_and_tools"] = []
 
+    # 3. Query strings belong in request_fields, never in the path
+    for ep in design.get("api_endpoints", []):
+        path, sep, query = str(ep.get("path", "")).partition("?")
+        if sep:
+            ep["path"] = path
+            ep.setdefault("request_fields", []).append(f"Query Parameters: {query}")
+            changes.append(f"Moved query string out of endpoint path '{path}' into request_fields.")
+
+    # 4. Drop duplicate components (same name)
+    seen, unique = set(), []
+    for comp in design.get("components", []):
+        key = str(comp.get("name", "")).strip().lower()
+        if key and key in seen:
+            continue
+        seen.add(key)
+        unique.append(comp)
+    if len(unique) != len(design.get("components", [])):
+        design["components"] = unique
+        changes.append("Removed duplicate components.")
+
     if changes:
         design.setdefault("design_decisions", []).extend(
             {"id": f"DEC-N{i+1:02d}", "decision": text,
@@ -219,6 +240,22 @@ def normalize_design(design: dict, requirements: dict) -> dict:
         )
         for text in changes:
             print(f"  [Design Agent] consistency fix: {text}")
+    return _renumber_ids(design)
+
+
+def _renumber_ids(design: dict) -> dict:
+    """Small models ignore ID formats (C1, EP-01, DEC-01). Force COMP/ENT/API/DD/EC-NN and keep references valid."""
+    comp_map = {}
+    for i, comp in enumerate(design.get("components", []), 1):
+        new_id = f"COMP-{i:02d}"
+        comp_map[comp.get("id")] = new_id
+        comp["id"] = new_id
+    for prefix, key in (("ENT", "data_entities"), ("API", "api_endpoints"), ("DD", "design_decisions")):
+        for i, item in enumerate(design.get(key, []), 1):
+            item["id"] = f"{prefix}-{i:02d}"
+    for i, edge in enumerate(design.get("edge_cases", []), 1):
+        edge["id"] = f"EC-{i:02d}"
+        edge["component_ids"] = [comp_map.get(c, c) for c in edge.get("component_ids", [])]
     return design
 
 
@@ -229,18 +266,17 @@ def Design_Agent(state: AgentState) -> dict:
 
     response = None
     try:
-        llm = imports.get_llm(agent_type="design", max_tokens=4000)
-        design_llm = llm.with_structured_output(DesignDocument)
-        design_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))
-        result = design_llm.invoke([
-            design_prompt,
-            imports.HumanMessage(
-                content=f"""Here are the requirements produced by the Requirement Agent:
-
-{requirements}
-"""
-            )
-        ])
+        llm = imports.get_llm(agent_type="design", max_tokens=6000)
+        messages = [imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))]
+        try:
+            messages.append(imports.SystemMessage(content=imports.load_prompt("skills/design_skill.txt")))
+        except OSError:
+            print("  [Design Agent] skills/design_skill.txt not found - continuing with the prompt only.")
+        messages.append(imports.HumanMessage(
+            content="Here are the requirements produced by the Requirement Agent:\n\n"
+                    + json.dumps(requirements, indent=1, ensure_ascii=False, default=str)
+        ))
+        result = imports.invoke_structured(llm, DesignDocument, messages)
         if result and isinstance(result, DesignDocument):
             response = result
         else:

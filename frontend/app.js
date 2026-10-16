@@ -30,6 +30,7 @@ const State = {
   idea: '',
   githubRepo: '',
   currentView: 'overview',
+  lastLoggedStage: null,
   pollTimer: null,
   isLive: false,
   isOverviewOnly: false,
@@ -177,6 +178,7 @@ window.launchPipeline = async function () {
     State.sessionId = data.session_id;
     State.projectId = data.project_id;
     State.idea = idea;
+    State.lastLoggedStage = null;
     State.projectName = deriveProjectName(idea);
     State.isLive = true;
     State.isOverviewOnly = false;
@@ -204,8 +206,12 @@ window.launchPipeline = async function () {
 };
 
 function deriveProjectName(idea) {
-  const words = idea.split(' ').slice(0, 4).join(' ');
-  return words.length > 30 ? words.slice(0, 30) + '…' : words;
+  const text = String(idea || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'Untitled';
+  if (text.length <= 40) return text;
+  const cut = text.slice(0, 40);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut) + '…';
 }
 
 /* ═════════════════════════════════════════════════
@@ -351,10 +357,21 @@ async function pollStatus() {
 }
 
 
+function logStageChange(stage) {
+  if (!stage) return;
+  const id = stage === 'requirements' ? 'requirement' : stage;
+  if (id === State.lastLoggedStage) return;
+  const def = STAGE_DEFS.find(s => s.id === id);
+  if (!def) return;
+  State.lastLoggedStage = id;
+  addActivity(agentLabel(id), 'Stage started', def.label);
+}
+
 function handlePollResult(data) {
   State.status = data.status;
   State.stage = data.stage || State.stage;
   State.error = data.error || null;
+  if (data.is_running) logStageChange(data.stage);
 
   // Render any real outputs that are already available,
   // even while the pipeline is still running.
@@ -437,9 +454,9 @@ function updateLiveStage(stage) {
   STAGE_DEFS.forEach((def, i) => {
     const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
     if (!el) return;
-    el.classList.remove('active', 'done');
+    el.classList.remove('running', 'done');
     if (i < idx) el.classList.add('done');
-    else if (i === idx) el.classList.add('active');
+    else if (i === idx) el.classList.add('running');
   });
 }
 
@@ -760,7 +777,7 @@ function updateSidebarStages(lastStage, result) {
   STAGE_DEFS.forEach((def, i) => {
     const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
     if (!el) return;
-    el.classList.remove('active');
+    el.classList.remove('running');
     if (i <= idx) el.classList.add('done');
   });
 }
@@ -1241,12 +1258,12 @@ function renderRequirementsView(req) {
 
     ${req.non_functional_requirements?.length ? `<div class="sec">
       <div class="sec-title">Non-Functional Requirements</div>
-      <ul class="req-list">${req.non_functional_requirements.map(r => `<li>${escHtml(displayText(r))}</li>`).join('')}</ul>
+      <ul class="req-list">${req.non_functional_requirements.map(r => `<li>${typeof r === 'object' && r ? `<span class="req-id">${escHtml(r.id || '')}</span>${r.category ? `[${escHtml(r.category)}] ` : ''}` : ''}${escHtml(displayText(r))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${req.acceptance_criteria?.length ? `<div class="sec">
       <div class="sec-title">Acceptance Criteria</div>
-      <ul class="req-list">${req.acceptance_criteria.map(a => `<li>${escHtml(displayText(a))}</li>`).join('')}</ul>
+      <ul class="req-list">${req.acceptance_criteria.map(a => `<li>${typeof a === 'object' && a ? `<span class="req-id">${escHtml(a.id || '')}</span>${a.requirement_id ? `(${escHtml(a.requirement_id)}) ` : ''}` : ''}${escHtml(displayText(a))}</li>`).join('')}</ul>
     </div>` : ''}
 
     ${renderInOutScope(req)}
@@ -1258,7 +1275,7 @@ function renderRequirementsView(req) {
 
     ${req.open_questions?.length ? `<div class="sec">
       <div class="sec-title">Open Questions</div>
-      <ul class="req-list">${req.open_questions.map(q => `<li>${escHtml(displayText(q))}</li>`).join('')}</ul>
+      <ul class="req-list">${req.open_questions.map(q => `<li>${typeof q === 'object' && q ? `<span class="req-id">${escHtml(q.id || '')}</span>` : ''}${escHtml(displayText(q))}${q && q.impacts && q.impacts.length ? ` <span class="tag-muted">(affects ${q.impacts.map(escHtml).join(', ')})</span>` : ''}</li>`).join('')}</ul>
     </div>` : ''}
   `;
   el.dataset.rendered = '1';
@@ -1292,37 +1309,80 @@ function renderInOutScope(req) {
 }
 
 /* ── Design ──────────────────────────────── */
+function reqTags(ids, label) {
+  if (!Array.isArray(ids) || !ids.length) return '';
+  return `<div class="edge-case-meta">${label ? label + ': ' : ''}${ids.map(id => `<span class="comp-dep-tag">${escHtml(id)}</span>`).join('')}</div>`;
+}
+
+function formatEndpoint(e) {
+  if (typeof e === 'string') return `<li style="font-family:var(--font-mono);font-size:12px">${escHtml(e)}</li>`;
+  const status = e.success_status ? ` → ${escHtml(e.success_status)}` : '';
+  const errors = Array.isArray(e.error_cases) && e.error_cases.length
+    ? `<div class="edge-case-meta">Errors: ${e.error_cases.map(x => `<span class="comp-dep-tag">${escHtml(displayText(x))}</span>`).join('')}</div>` : '';
+  return `<li style="font-family:var(--font-mono);font-size:12px">
+    <strong>${escHtml((e.method || '').toUpperCase())} ${escHtml(e.path || '')}</strong>${status}
+    <div style="font-family:var(--font-sans, inherit);color:var(--text-dim)">${escHtml(displayText(e.description || e.purpose || ''))}</div>
+    ${errors}
+  </li>`;
+}
+
 function renderDesignView(design) {
   const el = $('view-design');
   if (!el) return;
   const comps = design.components || [];
-  const decisions = design.decisions || [];
+  const entities = design.data_entities || [];
+  const decisions = design.design_decisions || design.decisions || [];
+  const techChoices = Array.isArray(design.technology_choices) ? design.technology_choices : [];
+  const libs = design.libraries_and_tools || [];
+  const integrations = design.external_integrations || [];
+  const architecture = typeof design.architecture === 'string' ? design.architecture : displayText(design.architecture);
+  const decisionIds = d => (typeof d === 'string' ? [] : d.requirement_ids || d.impacted || []);
 
   el.innerHTML = `
     <div class="view-hd">
-      <div class="view-breadcrumb">Pipeline · Stage 02</div>
+      <div class="view-breadcrumb">Pipeline · Stage 02${design.system_type ? ` · ${escHtml(design.system_type)}` : ''}</div>
       <div class="view-title">Architecture</div>
-      <div class="view-sub">${escHtml(design.architecture || '')}</div>
+      <div class="view-sub">${escHtml(architecture)}</div>
     </div>
+
+    ${techChoices.length || libs.length || integrations.length ? `<div class="sec">
+      <div class="sec-title">Technology</div>
+      <ul class="req-list">
+        ${techChoices.map(t => `<li><span class="req-id">${escHtml(typeof t === 'string' ? '' : t.category || '')}</span>${escHtml(typeof t === 'string' ? t : t.technology || '')}${t && t.reason ? ` <span class="tag-muted">— ${escHtml(displayText(t.reason))}</span>` : ''}</li>`).join('')}
+        ${libs.length ? `<li><span class="req-id">libraries</span>${escHtml(libs.map(displayText).join(', '))}</li>` : ''}
+        ${integrations.length ? `<li><span class="req-id">integrations</span>${escHtml(integrations.map(displayText).join(', '))}</li>` : ''}
+      </ul>
+    </div>` : ''}
 
     ${comps.length ? `<div class="sec">
       <div class="sec-title">Components</div>
       <table class="comp-table">
-        <thead><tr><th>ID</th><th>Name</th><th>Responsibility</th><th>Depends on</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Responsibility</th><th>Requirements</th></tr></thead>
         <tbody>
           ${comps.map(c => `<tr>
             <td class="comp-id">${escHtml(typeof c === 'string' ? '' : c.id || '')}</td>
             <td style="font-weight:600">${escHtml(typeof c === 'string' ? c : displayText(c.name || c))}</td>
             <td class="tag-muted">${escHtml(typeof c === 'string' ? '' : displayText(c.responsibility))}</td>
-            <td><div class="comp-deps">${(typeof c === 'string' ? [] : c.deps || []).map(d => `<span class="comp-dep-tag">${escHtml(d)}</span>`).join('')}</div></td>
+            <td><div class="comp-deps">${(typeof c === 'string' ? [] : c.requirement_ids || c.deps || []).map(d => `<span class="comp-dep-tag">${escHtml(d)}</span>`).join('')}</div></td>
           </tr>`).join('')}
         </tbody>
       </table>
     </div>` : ''}
 
+    ${entities.length ? `<div class="sec">
+      <div class="sec-title">Data Model</div>
+      <div class="edge-case-list">${entities.map(en => `<div class="edge-case-card">
+        <div class="edge-case-id">${escHtml(en.id || '')} · ${escHtml(en.name || '')}</div>
+        <div class="edge-case-description">${escHtml(displayText(en.purpose))}</div>
+        ${en.attributes?.length ? `<div class="edge-case-meta">Attributes: ${en.attributes.map(a => `<span class="comp-dep-tag">${escHtml(displayText(a))}</span>`).join('')}</div>` : ''}
+        ${en.relationships?.length ? `<div class="edge-case-meta">Relations: ${en.relationships.map(r => `<span class="comp-dep-tag">${escHtml(displayText(r))}</span>`).join('')}</div>` : ''}
+        ${reqTags(en.requirement_ids, 'Requirements')}
+      </div>`).join('')}</div>
+    </div>` : ''}
+
     ${design.api_endpoints?.length ? `<div class="sec">
       <div class="sec-title">API Endpoints</div>
-      <ul class="req-list">${design.api_endpoints.map(e => `<li style="font-family:var(--font-mono);font-size:12px">${escHtml(displayText(e))}</li>`).join('')}</ul>
+      <ul class="req-list">${design.api_endpoints.map(formatEndpoint).join('')}</ul>
     </div>` : ''}
 
     ${decisions.length ? `<div class="sec">
@@ -1332,7 +1392,7 @@ function renderDesignView(design) {
           <div class="dec-id">${escHtml(typeof d === 'string' ? 'DEC' : d.id || 'DEC')}</div>
           <div class="dec-decision">${escHtml(typeof d === 'string' ? d : d.decision || displayText(d))}</div>
           ${typeof d !== 'string' && d.reason ? `<div class="dec-reason">${escHtml(displayText(d.reason))}</div>` : ''}
-          ${typeof d !== 'string' && d.impacted?.length ? `<div class="dec-impact">${d.impacted.map(i => `<span class="comp-dep-tag">${escHtml(i)}</span>`).join('')}</div>` : ''}
+          ${decisionIds(d).length ? `<div class="dec-impact">${decisionIds(d).map(i => `<span class="comp-dep-tag">${escHtml(i)}</span>`).join('')}</div>` : ''}
         </div>
       `).join('')}
     </div>` : ''}
@@ -1342,10 +1402,10 @@ function renderDesignView(design) {
       <div class="edge-case-list">${design.edge_cases.map((edge, index) => {
         const item = typeof edge === 'string' ? { description: edge } : edge;
         return `<div class="edge-case-card">
-          <div class="edge-case-id">${escHtml(item.id || `EDGE-${String(index + 1).padStart(2, '0')}`)}</div>
+          <div class="edge-case-id">${escHtml(item.id || `EC-${String(index + 1).padStart(2, '0')}`)}</div>
           <div class="edge-case-description">${escHtml(displayText(item.description || item))}</div>
-          ${item.requirement_ids?.length ? `<div class="edge-case-meta">Requirements: ${item.requirement_ids.map(id => `<span class="comp-dep-tag">${escHtml(id)}</span>`).join('')}</div>` : ''}
-          ${item.component_ids?.length ? `<div class="edge-case-meta">Components: ${item.component_ids.map(id => `<span class="comp-dep-tag">${escHtml(id)}</span>`).join('')}</div>` : ''}
+          ${reqTags(item.requirement_ids, 'Requirements')}
+          ${reqTags(item.component_ids, 'Components')}
         </div>`;
       }).join('')}</div>
     </div>` : ''}
@@ -2239,7 +2299,7 @@ function displayText(value) {
   }
   if (Array.isArray(value)) return value.map(displayText).join(', ');
   if (typeof value === 'object') {
-    const preferred = ['description', 'text', 'requirement', 'criterion', 'value', 'name', 'title', 'detail'];
+    const preferred = ['description', 'question', 'story', 'text', 'requirement', 'criterion', 'value', 'name', 'title', 'detail'];
     const key = preferred.find(candidate => value[candidate] !== undefined && value[candidate] !== null);
     if (key) return displayText(value[key]);
     try { return JSON.stringify(value); } catch { return String(value); }
