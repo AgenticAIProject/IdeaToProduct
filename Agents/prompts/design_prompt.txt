@@ -95,32 +95,24 @@ applications.
 5. API DESIGN
 ==================================================
 
-Determine whether APIs are necessary.
+Determine whether APIs are necessary. 
 
-APIs may be required when the system needs communication between:
+If APIs are required, define a COMPLETE CONTRACT for each endpoint. The Code Agent and the Test Agent work independently and must agree on it perfectly.
 
-- Frontend and backend
-- Backend and external systems
-- Services
-- Other clients
+For each endpoint, provide:
+- Unique ID: (e.g., API-01)
+- HTTP method: (GET, POST, PUT, DELETE)
+- Path: The pure URL path string ONLY. (CRITICAL: Do NOT include query parameters like '?key=val' or '?key={val}' inside the path string. Query parameters must live exclusively in the request_fields section).
+- Purpose: What the endpoint achieves.
+- request_fields: Group inputs explicitly into:
+  * Path Parameters: (e.g., "id: integer inside the path URL")
+  * Query Parameters: (e.g., "category: string, optional query filter")
+  * Request Body: (e.g., "title: string, 1-255 chars, required JSON body")
+- response_fields: Names, types, and structure of the success response body.
+- success_status: The exact HTTP status integer for success (200, 201, 204).
+- error_cases: Each failure condition mapped precisely to an HTTP status code (e.g., "category not found -> 404", "empty title -> 422").
+- Related requirement IDs.
 
-If APIs are required, define a COMPLETE CONTRACT for each endpoint, because the Code Agent and the
-Test Agent work independently and must agree on it:
-
-- Unique ID
-- HTTP method
-- Path
-- Purpose
-- request_fields: names and types of the body/query/path inputs, with validation rules
-  (e.g. "title: string, 1-100 chars", "amount: integer cents, > 0")
-- response_fields: names and types of the success response body
-- success_status: the exact HTTP status for success (200, 201, 204 ...)
-- error_cases: each failure as "condition -> status" (e.g. "unknown id -> 404", "amount <= 0 -> 422")
-- Related requirement IDs
-
-If APIs are not required, return an empty API list.
-
-Do not create APIs simply because the project is a software system.
 
 ==================================================
 6. TECHNOLOGY CHOICES & DEPENDENCIES
@@ -141,7 +133,7 @@ Maintain a clear distinction between Core Architecture and Auxiliary Dependencie
 
 2. AUXILIARY LIBRARIES & TOOLS (libraries_and_tools):
    List helper packages, HTTP clients, ORMs, styling toolkits, and utilities here
-   (e.g., Axios, Pydantic, SQLAlchemy, TailwindCSS, Bcrypt, Lodash, Requests).
+   (e.g., Axios, Pydantic, TailwindCSS, Bcrypt, Lodash, Requests).
    CRITICAL: Never set an HTTP client or utility library (such as 'Axios') as the 'frontend' or 'backend' technology. Place it into libraries_and_tools instead.
 
 ==================================================
@@ -173,6 +165,14 @@ Write each edge case as a concrete input and the expected behavior
 
 Where possible, associate each edge case with the relevant
 requirement or design component.
+
+Identify important failure cases, boundary conditions, and unusual situations that implementation and testing should handle. 
+
+Write each edge case as a concrete input and the expected behavior (e.g., "empty title -> rejected with a validation error").
+
+CRITICAL FOR PERSISTENT SYSTEMS:
+If the system uses a database, you MUST specify a "Test Data Seed Contract" here.
+Detail exactly what records must be present in the database during test execution so that the Test Agent can write deterministic assertions against non-empty data states.
 
 ==================================================
 9. REQUIREMENT TRACEABILITY

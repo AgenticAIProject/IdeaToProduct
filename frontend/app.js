@@ -5,9 +5,14 @@
    API Contract (preserved from server.py):
    POST /api/start        { idea, project_id? }  → { session_id, project_id, status }
    GET  /api/status/:sid                          → { session_id, project_id, is_running, status, stage, error, result }
+   GET  /api/sessions/active                      → { session: status payload | null }
+   POST /api/stop         { session_id }           → { session_id, status:"stopping" }
    POST /api/answer        { session_id, answers[] } → { status:"resumed", session_id }
+   GET  /api/projects                              → { projects:[{ project_id, modified_at, file_count, files[] }] }
+   GET  /api/workspace/:sid                       → { files:[{ path, content }] }
+   GET  /api/export/:sid                          → project ZIP download
 
-   Status values: running | clarification | done | error
+   Status values: running | stopping | cancelled | clarification | done | error
    Pipeline stages: requirement → design → code → test → review → documentation (→ release)
    ───────────────────────────────────────────────── */
 'use strict';
@@ -27,6 +32,10 @@ const State = {
   currentView: 'overview',
   pollTimer: null,
   isLive: false,
+  isOverviewOnly: false,
+  status: null,
+  stage: null,
+  error: null,
   pipelineData: null,
   activityLog: [],
   startTime: null,
@@ -62,6 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
   navScrollEffect();
   wireCharCount();
   wireModelConfigButtons();
+  wireExportMenu();
   wireMobileMenu();
   wireSidebarResize();
 });
@@ -169,7 +179,15 @@ window.launchPipeline = async function () {
     State.idea = idea;
     State.projectName = deriveProjectName(idea);
     State.isLive = true;
+    State.isOverviewOnly = false;
+    State.status = 'running';
+    State.stage = 'requirements';
+    State.error = null;
+    setStopControl(true);
     State.pipelineData = null;
+    liveWorkspaceFiles = [];
+    liveWorkspaceSelected = '';
+    $('liveWorkspacePanel')?.classList.add('hidden');
     State.activityLog = [];
     State.startTime = Date.now();
 
@@ -197,7 +215,6 @@ function enterStudio(name, status) {
   // Switch nav
   $('navLanding')?.classList.add('hidden');
   $('navStudio')?.classList.remove('hidden');
-  $('studioProjectName').textContent = name;
   $('mobileMenuToggle')?.classList.remove('hidden');
   setNavPipelineStatus(status);
 
@@ -210,7 +227,7 @@ function enterStudio(name, status) {
   setSbStatus(status);
 
   // Build sidebar stages and empty overview
-  if (State.isLive) {
+  if (State.isLive || State.isOverviewOnly) {
     buildPipelineStages([]);
     buildActivityFeed([]);
     renderOverview(null);
@@ -224,11 +241,76 @@ function enterStudio(name, status) {
   window.scrollTo(0, 0);
 }
 
+window.openPipelineOverview = async function () {
+  let activeSession;
+  try {
+    const response = await fetch(`${API}/api/sessions/active`);
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok && !contentType.includes('application/json')) {
+      throw new Error(
+        'The running backend does not support active-session lookup. Keep the current pipeline running; restarting the backend may interrupt it.'
+      );
+    }
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Request failed (${response.status})`);
+    }
+    if (!contentType.includes('application/json')) {
+      throw new Error(
+        'The running backend returned a page instead of API data. Keep the current pipeline running; restarting the backend may interrupt it.'
+      );
+    }
+    ({ session: activeSession } = await response.json());
+  } catch (err) {
+    alert('Could not check for an active pipeline: ' + err.message);
+    return;
+  }
+
+  clearInterval(State.pollTimer);
+  State.sessionId = activeSession?.session_id || null;
+  State.projectId = activeSession?.project_id || null;
+  State.projectName = activeSession?.idea
+    ? deriveProjectName(activeSession.idea)
+    : 'Pipeline Overview';
+  State.idea = activeSession?.idea || '';
+  State.isLive = Boolean(activeSession);
+  State.isOverviewOnly = !activeSession;
+  State.status = activeSession?.status || 'idle';
+  State.stage = activeSession?.stage || null;
+  State.error = activeSession?.error || null;
+  State.pipelineData = activeSession?.result || null;
+  State.activityLog = [];
+  State.startTime = null;
+  liveWorkspaceFiles = [];
+  liveWorkspaceSelected = '';
+  $('liveWorkspacePanel')?.classList.add('hidden');
+  setStopControl(false);
+
+  document.querySelectorAll('.studio-view').forEach(el => {
+    delete el.dataset.rendered;
+    el.innerHTML = '';
+  });
+  enterStudio(State.projectName, State.status);
+
+  if (activeSession) {
+    handlePollResult(activeSession);
+    startPolling();
+  }
+}
+
 window.exitStudio = function () {
   clearInterval(State.pollTimer);
   State.sessionId = null;
   State.isLive = false;
+  State.isOverviewOnly = false;
+  State.status = null;
+  State.stage = null;
+  State.error = null;
   State.pipelineData = null;
+  liveWorkspaceFiles = [];
+  liveWorkspaceSelected = '';
+  $('liveWorkspacePanel')?.classList.add('hidden');
+  setStopControl(false);
 
   $('navStudio')?.classList.add('hidden');
   $('navLanding')?.classList.remove('hidden');
@@ -264,11 +346,16 @@ async function pollStatus() {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     handlePollResult(data);
-  } catch (e) { /* transient — keep polling */ }
+      refreshLiveWorkspace(data);
+    } catch (e) { /* transient — keep polling */ }
 }
 
 
 function handlePollResult(data) {
+  State.status = data.status;
+  State.stage = data.stage || State.stage;
+  State.error = data.error || null;
+
   // Render any real outputs that are already available,
   // even while the pipeline is still running.
   const result = data.result;
@@ -276,6 +363,17 @@ function handlePollResult(data) {
   if (result && typeof result === 'object') {
     State.pipelineData = result;
     populateLiveViews(result);
+  }
+  if (State.isLive) renderOverview(State.pipelineData);
+  updateGitHubReleaseStatus(data);
+
+  setStopControl(data.is_running, data.status === 'stopping');
+
+  if (data.status === 'stopping') {
+    updateLiveStage(data.stage || 'requirements');
+    setNavPipelineStatus('stopping');
+    setSbStatus('stopping');
+    return;
   }
 
   // Pipeline is still running: keep polling.
@@ -288,15 +386,24 @@ function handlePollResult(data) {
   }
 
   // Pipeline stopped: stop polling.
-  clearInterval(State.pollTimer);
-
   if (data.status === 'error') {
+    clearInterval(State.pollTimer);
     showPipelineError(data.error || 'Unknown error.');
     addActivity('System', 'Error', data.error || 'Pipeline stopped');
     return;
   }
 
+  if (data.status === 'cancelled') {
+    clearInterval(State.pollTimer);
+    setNavPipelineStatus('cancelled');
+    setSbStatus('cancelled');
+    addActivity('System', 'Execution stopped', 'Stopped by you. Completed stage results are preserved.');
+    showPipelineCancelled();
+    return;
+  }
+
   if (data.status === 'clarification') {
+    clearInterval(State.pollTimer);
     addActivity(
       'Requirement Agent',
       'Clarification needed',
@@ -310,6 +417,13 @@ function handlePollResult(data) {
     return;
   }
 
+  if (data.status !== 'done') {
+    setNavPipelineStatus('running');
+    setSbStatus('running');
+    return;
+  }
+
+  clearInterval(State.pollTimer);
   // Pipeline finished successfully.
   State.pipelineData = data.result;
   completePipeline(data.result);
@@ -330,6 +444,7 @@ function updateLiveStage(stage) {
 }
 
 function completePipeline(result) {
+  setStopControl(false);
   setNavPipelineStatus('done');
   setSbStatus('done');
   addActivity('System', 'Pipeline complete', 'All stages finished');
@@ -342,6 +457,40 @@ function completePipeline(result) {
     // Re-render overview with completion info
     renderOverview(result);
   }
+}
+
+window.stopPipeline = async function () {
+  if (!State.sessionId) return;
+
+  const btn = $('stopPipelineBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+  }
+
+  try {
+    const res = await fetch(`${API}/api/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: State.sessionId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+
+    setNavPipelineStatus('stopping');
+    setSbStatus('stopping');
+    startPolling();
+  } catch (err) {
+    setStopControl(true);
+    alert('Could not stop execution: ' + err.message);
+  }
+};
+
+function setStopControl(isRunning, isStopping = false) {
+  const btn = $('stopPipelineBtn');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !isRunning);
+  btn.disabled = isStopping || !isRunning;
+  btn.textContent = isStopping ? 'Stopping…' : 'Stop';
 }
 
 function populateLiveViews(result) {
@@ -546,6 +695,9 @@ function setNavPipelineStatus(status) {
   const indicator = $('navStatusIndicator');
   const statusMap = {
     running: 'Running',
+    idle: 'Not started',
+    stopping: 'Stopping…',
+    cancelled: 'Stopped',
     done: 'Complete',
     error: 'Error',
     paused: 'Needs input',
@@ -562,6 +714,9 @@ function setSbStatus(status) {
   if (!dot || !label) return;
   const statusMap = {
     running: 'Building',
+    idle: 'Not started',
+    stopping: 'Stopping…',
+    cancelled: 'Stopped',
     done: 'Complete',
     error: 'Error',
     paused: 'Needs input',
@@ -671,6 +826,7 @@ function renderViewIfNeeded(viewId) {
 
   const d = State.pipelineData;
   const mock = window.MockData || {};
+  const showDemo = !State.isLive && !State.isOverviewOnly;
 
   switch (viewId) {
     case 'overview':
@@ -679,7 +835,7 @@ function renderViewIfNeeded(viewId) {
     case 'requirement':
       if (d?.requirements && Object.keys(d.requirements).length) {
         renderRequirementsView(d.requirements);
-      } else if (!State.isLive && mock.requirements) {
+      } else if (showDemo && mock.requirements) {
         renderRequirementsView(mock.requirements);
       } else {
         renderEmptyView(el, 'Requirements', 'Requirements will appear once the requirement agent completes.');
@@ -688,7 +844,7 @@ function renderViewIfNeeded(viewId) {
     case 'design':
       if (d?.design && Object.keys(d.design).length) {
         renderDesignView(d.design);
-      } else if (!State.isLive && mock.design) {
+      } else if (showDemo && mock.design) {
         renderDesignView(mock.design);
       } else {
         renderEmptyView(el, 'Design', 'Architecture and component design will appear once the design agent completes.');
@@ -697,7 +853,7 @@ function renderViewIfNeeded(viewId) {
     case 'code':
       if (d?.code && Object.keys(d.code).length) {
         renderCodeView(d.code);
-      } else if (!State.isLive && mock.code) {
+      } else if (showDemo && mock.code) {
         renderCodeView(mock.code);
       } else {
         renderEmptyView(el, 'Code', 'Generated repository will appear once the code agent completes.');
@@ -706,7 +862,7 @@ function renderViewIfNeeded(viewId) {
     case 'test':
       if (d?.test_results && Object.keys(d.test_results).length) {
         renderTestsView(d.test_results);
-      } else if (!State.isLive && mock.tests) {
+      } else if (showDemo && mock.tests) {
         renderTestsView(mock.tests);
       } else {
         renderEmptyView(el, 'Tests', 'Test results will appear once the test agent completes.');
@@ -715,7 +871,7 @@ function renderViewIfNeeded(viewId) {
     case 'review':
       if (d?.review && Object.keys(d.review).length) {
         renderReviewView(d.review, d.approval_status);
-      } else if (!State.isLive && mock.review) {
+      } else if (showDemo && mock.review) {
         renderReviewView(mock.review, mock.review.approval_status);
       } else {
         renderEmptyView(el, 'Review', 'Quality review will appear once the review agent completes.');
@@ -724,7 +880,7 @@ function renderViewIfNeeded(viewId) {
     case 'documentation':
       if (d?.documentation && Object.keys(d.documentation).length) {
         renderDocsView(d.documentation);
-      } else if (!State.isLive && mock.documentation) {
+      } else if (showDemo && mock.documentation) {
         renderDocsView(mock.documentation);
       } else {
         renderEmptyView(el, 'Documentation', 'Documentation will appear once the documentation agent completes.');
@@ -736,12 +892,15 @@ function renderViewIfNeeded(viewId) {
     case 'artifacts':
       if (d) {
         renderArtifactsViewLive(d);
-      } else if (!State.isLive && mock.artifacts) {
+      } else if (showDemo && mock.artifacts) {
         renderArtifactsView(mock.artifacts);
       } else {
         renderEmptyView(el, 'Artifacts', 'Artifacts will appear as the pipeline produces outputs.');
       }
 
+      break;
+    case 'projects':
+      renderProjectsView();
       break;
     case 'models':
         renderModelsView();
@@ -751,6 +910,43 @@ function renderViewIfNeeded(viewId) {
         break;
   }
   el.dataset.rendered = '1';
+}
+
+function githubReleaseStatusMarkup(releaseData = {}, isRunning = false, requestError = '') {
+  if (isRunning) {
+    return `<span class="gh-status-badge gh-status-running"><span class="gh-spinner"></span> Publishing to GitHub…</span>`;
+  }
+  if (releaseData.status === 'success') {
+    return `<span class="gh-status-badge gh-status-success">Published to ${escHtml(releaseData.remote_url || 'GitHub')}</span>`;
+  }
+  const failure = requestError
+    || releaseData.error
+    || releaseData.reason
+    || (State.status === 'error' && State.stage === 'release' ? State.error : '');
+  if (failure || releaseData.status === 'failed' || releaseData.status === 'kept_local') {
+    return `<span class="gh-status-badge gh-status-error">${escHtml(failure || 'GitHub publishing failed.')}</span>`;
+  }
+  return `<span class="gh-status-badge gh-status-idle">Ready to publish</span>`;
+}
+
+function updateGitHubReleaseStatus(statusData) {
+  const status = $('ghStatus');
+  if (!status) return;
+
+  const releaseData = statusData.result?.release || State.pipelineData?.release || {};
+  const isReleaseRunning = Boolean(statusData.is_running && statusData.stage === 'release');
+  const requestError = statusData.status === 'error' && statusData.stage === 'release'
+    ? statusData.error
+    : '';
+  status.innerHTML = githubReleaseStatusMarkup(releaseData, isReleaseRunning, requestError);
+
+  const button = $('githubPublishBtn');
+  if (button) {
+    button.disabled = isReleaseRunning || releaseData.status === 'success';
+    if (releaseData.status !== 'success' && !isReleaseRunning) {
+      button.textContent = 'Retry Publish';
+    }
+  }
 }
 
 function renderTokenUsageView(usage) {
@@ -818,25 +1014,35 @@ function renderOverview(data) {
   if (!el) return;
 
   const mock = window.MockData || {};
-  const isComplete = State.isLive && State.pipelineData;
+  const isOverviewOnly = State.isOverviewOnly;
+  const isComplete = State.isLive && State.status === 'done';
   const elapsed = State.startTime ? formatElapsed(Date.now() - State.startTime) : '—';
   const requirements = State.pipelineData?.requirements || {};
   const problemStatement = requirements.problem_statement
     || (State.isLive ? State.idea : '')
-    || 'Your submitted idea will appear here while requirements are generated.';
+    || (isOverviewOnly
+      ? 'No idea submitted. Return to the landing page to start a new pipeline.'
+      : 'Your submitted idea will appear here while requirements are generated.');
 
   // Determine pipeline stages display
   let pipeline;
   if (State.isLive && State.pipelineData) {
-    // Build from real result
-    const result = State.pipelineData;
-    const lastStageId = (result.current_stage || 'documentation').replace(/s$/, '');
-    const lastIdx = STAGE_DEFS.findIndex(s => s.id === lastStageId);
-    pipeline = STAGE_DEFS.map((def, i) => ({
+    const currentStage = (State.stage || State.pipelineData.current_stage || '').replace(/s$/, '');
+    const stageResults = {
+      requirement: State.pipelineData.requirements,
+      design: State.pipelineData.design,
+      code: State.pipelineData.code,
+      test: State.pipelineData.test_results,
+      review: State.pipelineData.review,
+      documentation: State.pipelineData.documentation,
+    };
+    pipeline = STAGE_DEFS.map(def => ({
       ...def,
-      status: i <= (lastIdx >= 0 ? lastIdx : STAGE_DEFS.length - 1) ? 'done' : 'queued',
+      status: stageResults[def.id] && Object.keys(stageResults[def.id]).length
+        ? 'done'
+        : def.id === currentStage ? 'running' : 'queued',
     }));
-  } else if (!State.isLive && mock.pipeline) {
+  } else if (!State.isLive && !isOverviewOnly && mock.pipeline) {
     pipeline = mock.pipeline.map(p => ({ ...p }));
   } else {
     pipeline = STAGE_DEFS.map(def => ({ ...def, status: 'queued' }));
@@ -844,12 +1050,18 @@ function renderOverview(data) {
 
   // Current stage label
   let currentStageName = '—';
-  if (State.isLive && !State.pipelineData) {
-    currentStageName = 'Processing…';
-  } else if (State.pipelineData) {
-    const cs = State.pipelineData.current_stage || 'documentation';
+  if (isOverviewOnly) {
+    currentStageName = 'Not started';
+  } else if (State.isLive && State.status === 'done') {
+    currentStageName = 'Pipeline complete';
+  } else if (State.isLive && State.status === 'cancelled') {
+    currentStageName = 'Stopped';
+  } else if (State.isLive && State.status === 'stopping') {
+    currentStageName = 'Stopping…';
+  } else if (State.isLive) {
+    const cs = State.stage || State.pipelineData?.current_stage || 'requirements';
     const def = STAGE_DEFS.find(s => s.id === cs || s.id === cs.replace(/s$/, ''));
-    currentStageName = def ? def.label + ' (Complete)' : cs;
+    currentStageName = def ? `${def.label} (latest update)` : cs;
   } else if (!State.isLive && mock.project) {
     currentStageName = agentLabel(mock.project.currentAgent);
   }
@@ -859,14 +1071,20 @@ function renderOverview(data) {
       <div class="view-breadcrumb">Project</div>
       <div class="view-title">Project Overview</div>
       <div class="view-sub">${State.isLive
-        ? (isComplete ? 'Pipeline complete. Review the outputs below.' : 'Pipeline is running…')
-        : 'Demo mode — showing sample data.'}</div>
+        ? (isComplete ? 'Pipeline complete. Review the outputs below.'
+          : State.status === 'stopping' ? 'Pipeline is stopping…'
+            : State.status === 'cancelled' ? 'Pipeline was stopped.'
+              : State.status === 'clarification' ? 'Waiting for your input.'
+                : State.status === 'error' ? 'Pipeline failed.'
+                  : 'Pipeline is running…')
+        : isOverviewOnly ? 'No pipeline is running. Start a build from the landing page when you are ready.'
+          : 'Demo mode — showing sample data.'}</div>
     </div>
 
     <div class="ov-problem-card">
         <div class="ov-card-label">Problem Statement</div>
         <div class="ov-problem-text">${escHtml(problemStatement)}</div>
-        ${requirements.problem_statement ? '' : '<div class="ov-card-sub">Based on your submitted idea; the Requirements Agent will refine it.</div>'}
+        ${requirements.problem_statement || isOverviewOnly ? '' : '<div class="ov-card-sub">Based on your submitted idea; the Requirements Agent will refine it.</div>'}
     </div>
 
     ${isComplete ? `
@@ -881,12 +1099,14 @@ function renderOverview(data) {
       <div class="ov-card">
         <div class="ov-card-label">Current Stage</div>
         <div class="ov-card-val">${escHtml(currentStageName)}</div>
-        <div class="ov-card-sub">${State.isLive ? 'Live pipeline' : 'Demo data'}</div>
+        <div class="ov-card-sub">${State.isLive
+          ? (isComplete ? 'All stages finished' : 'Most recent pipeline update')
+          : isOverviewOnly ? 'Waiting for a project idea' : 'Demo data'}</div>
       </div>
       <div class="ov-card">
         <div class="ov-card-label">Elapsed</div>
-        <div class="ov-card-val">${escHtml(State.isLive ? elapsed : (mock.project?.elapsed || '—'))}</div>
-        <div class="ov-card-sub">Session ${State.sessionId ? State.sessionId.slice(0, 8) + '…' : '—'}</div>
+        <div class="ov-card-val">${escHtml(State.isLive ? elapsed : (isOverviewOnly ? '—' : (mock.project?.elapsed || '—')))}</div>
+        <div class="ov-card-sub">${State.sessionId ? `Session ${State.sessionId.slice(0, 8)}…` : isOverviewOnly ? 'No active session' : '—'}</div>
       </div>
     </div>
 
@@ -912,6 +1132,55 @@ function renderOverview(data) {
     </div>
   `;
 }
+
+async function renderProjectsView() {
+  const el = $('view-projects');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="view-hd">
+      <div class="view-breadcrumb">Project</div>
+      <div class="view-title">Previous Projects</div>
+      <div class="view-sub">Generated folders saved under generated_projects.</div>
+    </div>
+    <div class="project-list" id="projectList">
+      <div class="empty-state"><div class="empty-state-title">Loading projects…</div></div>
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`${API}/api/projects`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    const list = $('projectList');
+    if (!list) return;
+
+    if (!projects.length) {
+      list.innerHTML = '<div class="empty-state"><div class="empty-state-title">No generated projects yet</div><div class="empty-state-sub">Projects will appear here after files are generated.</div></div>';
+      return;
+    }
+
+    list.innerHTML = projects.map(project => `
+      <details class="project-folder">
+        <summary>
+          <span class="project-folder-name">${escHtml(project.project_id)}</span>
+          <span class="project-folder-meta">${Number(project.file_count) || 0} files · ${escHtml(new Date(project.modified_at * 1000).toLocaleString())}</span>
+        </summary>
+        <ul class="project-file-list">
+          ${(Array.isArray(project.files) && project.files.length
+            ? project.files.map(file => `<li>${escHtml(file)}</li>`).join('')
+            : '<li class="project-file-empty">This folder contains no visible files.</li>')}
+        </ul>
+      </details>
+    `).join('');
+  } catch (err) {
+    const list = $('projectList');
+    if (list) list.innerHTML = `<div class="err-card"><div class="err-title">Could not load projects</div><div class="err-msg">${escHtml(err.message)}</div><button class="btn-ghost" type="button" onclick="loadProjects()">Try again</button></div>`;
+    if (el) el.dataset.rendered = '';
+  }
+}
+
+window.loadProjects = renderProjectsView;
 
 function formatElapsed(ms) {
   const secs = Math.floor(ms / 1000);
@@ -1507,6 +1776,7 @@ function renderGitHubView() {
   if (!el) return;
 
   const releaseData = State.pipelineData?.release || {};
+  const releaseIsRunning = State.isLive && State.status === 'running' && State.stage === 'release';
   const hasRelease = releaseData.status === 'success';
 
   el.innerHTML = `
@@ -1540,12 +1810,12 @@ function renderGitHubView() {
           <div class="gh-field">
             <label class="gh-label" for="githubTokenInput">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v4M5 3h4M3 7a4 4 0 108 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Personal Access Token <span class="gh-optional">(optional)</span>
+              Personal Access Token
             </label>
             <div class="gh-input-wrap">
               <input id="githubTokenInput" class="gh-input" type="password" placeholder="ghp_xxxxxxxxxxxx" spellcheck="false" />
             </div>
-            <div class="gh-hint">Used for private repos. Never stored beyond this session.</div>
+            <div class="gh-hint">GitHub requires a token with repository Contents write access for publishing. Never stored beyond this request.</div>
           </div>
 
           <div class="gh-field">
@@ -1560,19 +1830,8 @@ function renderGitHubView() {
         </div>
 
         <div class="gh-card-footer">
-          <div class="gh-status" id="ghStatus">
-            ${hasRelease
-              ? `<span class="gh-status-badge gh-status-success">
-                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                   Published to ${escHtml(releaseData.remote_url || '')}
-                 </span>`
-              : `<span class="gh-status-badge gh-status-idle">
-                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="2" fill="currentColor" opacity="0.4"/></svg>
-                   Ready to publish
-                 </span>`
-            }
-          </div>
-          <button class="gh-publish-btn" id="githubPublishBtn" type="button">
+          <div class="gh-status" id="ghStatus">${githubReleaseStatusMarkup(releaseData, releaseIsRunning)}</div>
+          <button class="gh-publish-btn" id="githubPublishBtn" type="button" ${releaseIsRunning || hasRelease ? 'disabled' : ''}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M2 11h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -1645,7 +1904,7 @@ function renderGitHubView() {
       }).then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Release failed');
-        if (statusEl) statusEl.innerHTML = `<span class="gh-status-badge gh-status-running">Release started for ${escHtml(repo)}…</span>`;
+        if (statusEl) statusEl.innerHTML = githubReleaseStatusMarkup({}, true);
         startPolling();
       }).catch(error => {
         if (statusEl) statusEl.innerHTML = `<span class="gh-status-badge gh-status-error">${escHtml(error.message)}</span>`;
@@ -1752,6 +2011,164 @@ window.saveModelConfig = async function () {
   }
 };
 
+let liveWorkspaceFiles = [];
+let liveWorkspaceSelected = '';
+let liveWorkspacePollBusy = false;
+
+function wireExportMenu() {
+  const btn = $('exportMenuBtn');
+  const menu = $('exportMenu');
+  if (!btn || !menu) return;
+
+  btn.addEventListener('click', () => {
+    const opening = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !opening);
+    btn.setAttribute('aria-expanded', String(opening));
+  });
+
+  menu.querySelectorAll('[data-export]').forEach(item => {
+    item.addEventListener('click', async () => {
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      try {
+        if (item.dataset.export === 'zip') {
+          if (!State.sessionId) throw new Error('Start a project before exporting its generated files.');
+          const response = await fetch(`${API}/api/export/${encodeURIComponent(State.sessionId)}`);
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.error || 'Generated project ZIP is not available yet.');
+          }
+          downloadBlob(await response.blob(), `${safeFileName(State.projectName)}.zip`);
+        } else if (item.dataset.export === 'json') {
+          downloadBlob(
+            new Blob([JSON.stringify(State.pipelineData || {}, null, 2)], { type: 'application/json' }),
+            `${safeFileName(State.projectName)}-pipeline.json`
+          );
+        } else {
+          downloadBlob(
+            new Blob([pipelineMarkdown(State.pipelineData || {})], { type: 'text/markdown;charset=utf-8' }),
+            `${safeFileName(State.projectName)}-report.md`
+          );
+        }
+      } catch (err) {
+        alert(err.message || 'Export failed.');
+      }
+    });
+  });
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.export-menu-wrap')) {
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
+function safeFileName(value) {
+  return String(value || 'project').trim().toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function pipelineMarkdown(data) {
+  const lines = [
+    `# ${State.projectName || 'IdeaToProduct project'} report`,
+    '',
+    `- Project ID: ${State.projectId || 'unknown'}`,
+    `- Session ID: ${State.sessionId || 'unknown'}`,
+    '',
+  ];
+  const addSection = (title, value) => {
+    if (value == null || value === '') return;
+    lines.push(`## ${title}`, '', typeof value === 'string'
+      ? value
+      : `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, '');
+  };
+  addSection('Requirements', data.requirements);
+  addSection('Design', data.design);
+  addSection('Code', data.code);
+  addSection('Tests', data.test_results || data.tests);
+  addSection('Review', data.review);
+  addSection('Documentation', data.documentation);
+  return lines.join('\n');
+}
+
+async function refreshLiveWorkspace(statusData) {
+  const panel = $('liveWorkspacePanel');
+  if (!panel || !State.sessionId || liveWorkspacePollBusy) return;
+  const result = statusData.result || {};
+  const hasGeneratedProject = Boolean(
+    result.generated_project_path
+    || result.code?.generated_project_path
+    || result.code?.files?.length
+  );
+  if (!hasGeneratedProject && !liveWorkspaceFiles.length) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  liveWorkspacePollBusy = true;
+  try {
+    const response = await fetch(`${API}/api/workspace/${encodeURIComponent(State.sessionId)}`);
+    if (!response.ok) throw new Error(await response.text());
+    const payload = await response.json();
+    liveWorkspaceFiles = Array.isArray(payload.files) ? payload.files : [];
+    $('liveWorkspaceStatus').textContent = liveWorkspaceFiles.length
+      ? `${liveWorkspaceFiles.length} generated file(s) · updates as the pipeline runs`
+      : 'The generated project folder does not contain visible files.';
+    $('liveWorkspaceBadge').textContent = liveWorkspaceFiles.length
+      ? (statusData.is_running ? 'Updating' : 'Available')
+      : 'Empty';
+    document.querySelector('.live-workspace-indicator')
+      ?.classList.toggle('is-active', Boolean(statusData.is_running));
+    renderLiveWorkspaceFiles();
+  } catch (err) {
+    $('liveWorkspaceStatus').textContent = `Could not load generated files: ${err.message}`;
+    $('liveWorkspaceBadge').textContent = 'Unavailable';
+  } finally {
+    liveWorkspacePollBusy = false;
+  }
+}
+
+function renderLiveWorkspaceFiles() {
+  const list = $('liveFileList');
+  if (!list) return;
+  if (!liveWorkspaceFiles.length) {
+    list.innerHTML = '<div class="live-empty">No saved files yet. Only real generated files are shown here.</div>';
+    $('liveEditorTab').textContent = 'Waiting for files';
+    $('liveEditorContent').textContent = '// The Code Agent has not exposed any generated files yet.';
+    return;
+  }
+
+  if (!liveWorkspaceFiles.some(file => file.path === liveWorkspaceSelected)) {
+    liveWorkspaceSelected = liveWorkspaceFiles[0].path;
+  }
+  list.innerHTML = liveWorkspaceFiles.map(file => `
+    <button class="live-file-button${file.path === liveWorkspaceSelected ? ' active' : ''}"
+      type="button" data-live-file="${escHtml(file.path)}">${escHtml(file.path)}</button>
+  `).join('');
+  list.querySelectorAll('[data-live-file]').forEach(button => {
+    button.addEventListener('click', () => {
+      liveWorkspaceSelected = button.dataset.liveFile;
+      renderLiveWorkspaceFiles();
+    });
+  });
+  const selected = liveWorkspaceFiles.find(file => file.path === liveWorkspaceSelected);
+  $('liveEditorTab').textContent = selected?.path || 'No file selected';
+  $('liveEditorContent').textContent = selected?.content || '// Empty file or larger than the preview limit.';
+}
+
 // Close overlays on Escape
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -1774,6 +2191,21 @@ function showPipelineError(msg) {
       <div class="err-label">Agent Interrupted</div>
       <div class="err-title">Pipeline stopped</div>
       <div class="err-msg">${escHtml(msg)}</div>
+      <div class="err-actions">
+        <button class="btn-ghost" type="button" onclick="exitStudio()">Exit</button>
+      </div>
+    </div>
+  `);
+}
+
+function showPipelineCancelled() {
+  const el = $('view-overview');
+  if (!el) return;
+  el.insertAdjacentHTML('afterbegin', `
+    <div class="err-card" style="margin-bottom:28px">
+      <div class="err-label">Execution cancelled</div>
+      <div class="err-title">Pipeline stopped</div>
+      <div class="err-msg">Stopped by you. Results from completed stages are preserved.</div>
       <div class="err-actions">
         <button class="btn-ghost" type="button" onclick="exitStudio()">Exit</button>
       </div>

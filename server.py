@@ -3,6 +3,8 @@ import os
 import json
 import uuid
 import threading
+import io
+import zipfile
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
@@ -20,6 +22,65 @@ import imports as agent_imports
 # In-memory sessions store
 sessions = {}
 sessions_lock = threading.Lock()
+
+
+def _session_project_dir(session):
+    """Resolve a session's generated directory without allowing paths outside the workspace."""
+    result = session.get("result") or {}
+    code = result.get("code") or {}
+    project_path = result.get("generated_project_path") or code.get("generated_project_path")
+    if project_path:
+        candidate = Path(project_path)
+    else:
+        project_id = str(session.get("project_id", ""))
+        if not project_id or Path(project_id).name != project_id:
+            return None
+        candidate = ROOT_DIR / "generated_projects" / project_id
+
+    root = (ROOT_DIR / "generated_projects").resolve()
+    if candidate.is_symlink():
+        return None
+    candidate = candidate.resolve()
+    if candidate.parent != root or not candidate.is_dir():
+        return None
+    return candidate
+
+
+def list_generated_projects():
+    """Return generated project folders and their relative file paths."""
+    projects_dir = ROOT_DIR / "generated_projects"
+    if not projects_dir.is_dir():
+        return []
+
+    projects = []
+    ignored_dirs = {".git", "__pycache__", "node_modules", ".venv"}
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir() or project_dir.is_symlink():
+            continue
+
+        files = []
+        for current_dir, child_dirs, filenames in os.walk(project_dir, followlinks=False):
+            current_path = Path(current_dir)
+            child_dirs[:] = [
+                name for name in child_dirs
+                if not name.startswith(".")
+                and name not in ignored_dirs
+                and not (current_path / name).is_symlink()
+            ]
+            for filename in filenames:
+                path = current_path / filename
+                if filename.startswith(".") or path.is_symlink() or not path.is_file():
+                    continue
+                files.append(path.relative_to(project_dir).as_posix())
+
+        projects.append({
+            "project_id": project_dir.name,
+            "modified_at": project_dir.stat().st_mtime,
+            "file_count": len(files),
+            "files": sorted(files),
+        })
+
+    return sorted(projects, key=lambda project: project["modified_at"], reverse=True)
 
 
 def run_release_thread(
@@ -47,10 +108,21 @@ def run_release_thread(
         release_update = Release_Agent(release_state)
         with sessions_lock:
             release_state.update(release_update)
-            sessions[session_id]["result"] = release_state
-            sessions[session_id]["is_running"] = False
-            sessions[session_id]["stage"] = "release"
-            sessions[session_id]["status"] = "done"
+            session = sessions[session_id]
+            session["result"] = release_state
+            session["is_running"] = False
+            session["stage"] = "release"
+            release_result = release_state.get("release") or {}
+            if release_result.get("status") == "success":
+                session["status"] = "done"
+                session["error"] = None
+            else:
+                session["status"] = "error"
+                session["error"] = (
+                    release_result.get("error")
+                    or release_result.get("reason")
+                    or f"GitHub release did not succeed ({release_result.get('status', 'unknown')})."
+                )
     except Exception as exc:
         with sessions_lock:
             sessions[session_id]["is_running"] = False
@@ -67,9 +139,14 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
 
     try:
         with sessions_lock:
-            sessions[session_id]["is_running"] = True
-            sessions[session_id]["status"] = "running"
-            sessions[session_id]["error"] = None
+            session = sessions[session_id]
+            if session.get("cancel_requested"):
+                session["is_running"] = False
+                session["status"] = "cancelled"
+                return
+            session["is_running"] = True
+            session["status"] = "running"
+            session["error"] = None
 
         if resume_input:
             graph_input = resume_input
@@ -112,7 +189,21 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
             graph_input = initial_state
 
         result = {}
-        for update in graph.stream(graph_input, config=config, stream_mode="updates"):
+        stream = iter(graph.stream(graph_input, config=config, stream_mode="updates"))
+        while True:
+            with sessions_lock:
+                session = sessions[session_id]
+                if session.get("cancel_requested"):
+                    session["is_running"] = False
+                    session["status"] = "cancelled"
+                    session["result"] = dict(result) or session.get("result")
+                    return
+
+            try:
+                update = next(stream)
+            except StopIteration:
+                break
+
             if not isinstance(update, dict):
                 continue
 
@@ -123,34 +214,55 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 stage = node_update.get("current_stage", node_name)
                 workflow_status = node_update.get("workflow_status", "running")
                 with sessions_lock:
-                    sessions[session_id]["stage"] = stage
-                    sessions[session_id]["result"] = dict(result)
+                    session = sessions[session_id]
+                    session["stage"] = stage
+                    session["result"] = dict(result)
+                    if session.get("cancel_requested"):
+                        session["is_running"] = False
+                        session["status"] = "cancelled"
+                        return
                     if workflow_status == "waiting_for_user":
-                        sessions[session_id]["status"] = "clarification"
+                        session["status"] = "clarification"
 
         if not result:
             raise RuntimeError("Pipeline produced no agent updates.")
 
         with sessions_lock:
+            session = sessions[session_id]
+            if session.get("cancel_requested"):
+                session["is_running"] = False
+                session["status"] = "cancelled"
+                session["result"] = dict(result)
+                return
             stage = result.get("current_stage", "documentation")
             workflow_status = result.get("workflow_status", "done")
 
             if workflow_status == "waiting_for_user":
-                sessions[session_id]["status"] = "clarification"
-                sessions[session_id]["stage"] = "clarification"
-                sessions[session_id]["is_running"] = False
-                sessions[session_id]["result"] = result
+                session["status"] = "clarification"
+                session["stage"] = "clarification"
+                session["is_running"] = False
+                session["result"] = result
+            elif workflow_status == "failed":
+                session["status"] = "error"
+                session["stage"] = stage
+                session["is_running"] = False
+                session["result"] = result
+                session["error"] = "Pipeline ended with a failed agent stage."
             else:
-                sessions[session_id]["status"] = "done"
-                sessions[session_id]["stage"] = stage
-                sessions[session_id]["is_running"] = False
-                sessions[session_id]["result"] = result
+                session["status"] = "done"
+                session["stage"] = stage
+                session["is_running"] = False
+                session["result"] = result
 
     except Exception as exc:
         with sessions_lock:
-            sessions[session_id]["is_running"] = False
-            sessions[session_id]["status"] = "error"
-            sessions[session_id]["error"] = str(exc)
+            session = sessions[session_id]
+            session["is_running"] = False
+            if session.get("cancel_requested"):
+                session["status"] = "cancelled"
+            else:
+                session["status"] = "error"
+                session["error"] = str(exc)
 
 
 class PipelineServerHandler(SimpleHTTPRequestHandler):
@@ -175,6 +287,137 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if path == "/api/sessions/active":
+            with sessions_lock:
+                active_session = next(
+                    (session for session in reversed(list(sessions.values())) if session.get("is_running")),
+                    None,
+                )
+                payload = {
+                    "session": {
+                        "session_id": active_session["session_id"],
+                        "project_id": active_session.get("project_id"),
+                        "is_running": active_session.get("is_running", False),
+                        "status": active_session.get("status", "running"),
+                        "stage": active_session.get("stage", "requirements"),
+                        "error": active_session.get("error"),
+                        "idea": active_session.get("idea", ""),
+                        "result": active_session.get("result"),
+                    } if active_session else None,
+                }
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
+        if path == "/api/projects":
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"projects": list_generated_projects()}).encode("utf-8"))
+            return
+
+        if path.startswith("/api/workspace/"):
+            session_id = path.removeprefix("/api/workspace/").strip()
+            with sessions_lock:
+                session = sessions.get(session_id)
+                if session:
+                    project_dir = _session_project_dir(session)
+                else:
+                    project_dir = None
+
+            if not session:
+                self.send_response(404)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Session not found"}).encode("utf-8"))
+                return
+            if project_dir is None:
+                self.send_response(404)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Generated project is not available"}).encode("utf-8"))
+                return
+
+            files = []
+            ignored_dirs = {".git", "__pycache__", "node_modules", ".venv"}
+            for current_dir, child_dirs, filenames in os.walk(project_dir, followlinks=False):
+                current_path = Path(current_dir)
+                child_dirs[:] = [
+                    name for name in child_dirs
+                    if not name.startswith(".")
+                    and name not in ignored_dirs
+                    and not (current_path / name).is_symlink()
+                ]
+                for filename in filenames:
+                    file_path = current_path / filename
+                    if filename.startswith(".") or file_path.is_symlink() or not file_path.is_file():
+                        continue
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace") if file_path.stat().st_size <= 256_000 else ""
+                    except OSError:
+                        continue
+                    files.append({
+                        "path": file_path.relative_to(project_dir).as_posix(),
+                        "content": content,
+                    })
+                    if len(files) >= 500:
+                        break
+                if len(files) >= 500:
+                    break
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"files": files}).encode("utf-8"))
+            return
+
+        if path.startswith("/api/export/"):
+            session_id = path.removeprefix("/api/export/").strip()
+            with sessions_lock:
+                session = sessions.get(session_id)
+                project_dir = _session_project_dir(session) if session else None
+
+            if not session or project_dir is None:
+                self.send_response(404)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Generated project is not available"}).encode("utf-8"))
+                return
+
+            archive = io.BytesIO()
+            ignored_dirs = {".git", "__pycache__", "node_modules", ".venv"}
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+                for current_dir, child_dirs, filenames in os.walk(project_dir, followlinks=False):
+                    current_path = Path(current_dir)
+                    child_dirs[:] = [
+                        name for name in child_dirs
+                        if not name.startswith(".")
+                        and name not in ignored_dirs
+                        and not (current_path / name).is_symlink()
+                    ]
+                    for filename in filenames:
+                        file_path = current_path / filename
+                        if filename.startswith(".") or file_path.is_symlink() or not file_path.is_file():
+                            continue
+                        zipped.write(file_path, file_path.relative_to(project_dir).as_posix())
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", 'attachment; filename="generated-project.zip"')
+            self.end_headers()
+            self.wfile.write(archive.getvalue())
+            return
 
         # Handle /api/models GET — return current model config
         if path == "/api/models":
@@ -284,6 +527,7 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     "stage": "requirements",
                     "error": None,
                     "result": None,
+                    "cancel_requested": False,
                 }
 
             worker = threading.Thread(
@@ -302,6 +546,43 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                 "project_id": project_id,
                 "status": "running"
             }).encode("utf-8"))
+            return
+
+        elif path == "/api/stop":
+            session_id = body.get("session_id")
+            if not session_id:
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "session_id is required"}).encode("utf-8"))
+                return
+
+            with sessions_lock:
+                session = sessions.get(session_id)
+                if not session:
+                    self.send_response(404)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Session not found"}).encode("utf-8"))
+                    return
+                if not session.get("is_running"):
+                    self.send_response(409)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "No execution is running"}).encode("utf-8"))
+                    return
+
+                session["cancel_requested"] = True
+                session["status"] = "stopping"
+
+            self.send_response(202)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "stopping", "session_id": session_id}).encode("utf-8"))
             return
 
         elif path == "/api/answer":
@@ -337,6 +618,7 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                 session["is_running"] = True
                 session["status"] = "running"
                 session["error"] = None
+                session["cancel_requested"] = False
 
             worker = threading.Thread(
                 target=run_pipeline_thread,
@@ -392,6 +674,21 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": "Repository URL is required"}).encode("utf-8"))
                     return
+                if not github_token and not any(
+                    os.environ.get(name) for name in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT")
+                ):
+                    self.send_response(400)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": "A GitHub token with repository Contents write access is required to publish."
+                    }).encode("utf-8"))
+                    return
+                session["is_running"] = True
+                session["status"] = "running"
+                session["stage"] = "release"
+                session["error"] = None
 
             worker = threading.Thread(
                 target=run_release_thread,

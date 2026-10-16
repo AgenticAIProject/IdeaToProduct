@@ -49,3 +49,11 @@ QUALITY
 - User interfaces must be functional and interactive with realistic sample data and empty/error states.
   No placeholder text.
 - Implement the smallest solution that satisfies the approved V1 scope. Aim for 3 to 8 source files.
+
+CRITICAL RUNTIME HYGIENE:
+- You must explicitly import every core Python standard library module you reference. For example, if you use `os.environ`, you MUST include `import os` at the top of the file. If you use `sqlite3`, you MUST include `import sqlite3`. 
+- Never inject query parameters or filtering notation directly into framework route decorators. Use function method signatures with type descriptors instead (e.g., `@app.get("/news")` with a parameter `category: Optional[str] = None`).
+
+Root Route Hygiene: Always implement a lightweight welcome landing route at the absolute path root (@app.get("/")). 
+This route should return a basic JSON status payload detailing system availability, system metadata, or a list of available endpoints.
+ Never leave the absolute root unmapped to avoid confusing the user with clean execution 404 Not Found messages.

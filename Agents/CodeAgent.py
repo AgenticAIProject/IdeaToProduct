@@ -24,7 +24,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -166,7 +166,19 @@ def validate_file(path: str, content: str) -> Optional[str]:
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext == ".py":
-            ast.parse(content, filename=path)
+            try:
+            # Check for raw compilation typos
+                ast.parse(content, filename=path)
+                
+                # Check for common missing imports before sending to test_runner
+                if "os.environ" in content and "import os" not in content:
+                    return "SyntaxError: 'os' module is used (os.environ) but 'import os' is missing."
+                if "sqlite3.connect" in content and "import sqlite3" not in content:
+                    return "SyntaxError: 'sqlite3' module is used but 'import sqlite3' is missing."
+                
+            except SyntaxError as e:
+                return f"SyntaxError line {e.lineno}: {e.msg}"
+
         elif ext == ".json":
             json.loads(content)
         elif ext in (".html", ".htm"):
@@ -411,10 +423,14 @@ def Code_Agent(state: AgentState) -> dict:
     previous = state.get("code") or {}
     prev_files = {f["path"]: f["content"] for f in previous.get("files", []) if isinstance(f, dict)}
     is_rework = bool(prev_files) and code_version > 1
+    is_review_retry = is_rework and state.get("approval_status") == "rejected"
 
-    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "3000"))   # OpenRouter reserves credit for max_tokens
-    llm = imports.get_llm(agent_type="code", max_tokens=file_tokens)
-    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000)
+    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "3000"))
+    provider: Literal["ollama", "groq"] = "groq" if is_review_retry else "ollama"
+    if is_review_retry:
+        print("  [Code Agent] Review rejected the first implementation; using Groq for the targeted rework.")
+    llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
+    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
 
     written: dict[str, str] = {}
     meta: dict[str, FilePlan] = {}

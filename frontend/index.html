@@ -33,17 +33,27 @@
       <!-- Landing nav links -->
       <div class="nav-links" id="navLanding">
         <a href="#pipeline-overview" class="nav-link">Pipeline</a>
+        <button class="nav-link" id="navOverviewBtn" type="button" onclick="openPipelineOverview()">Overview</button>
         <button class="nav-link" id="navModelCfgBtn" type="button">Models</button>
       </div>
 
       <!-- Studio nav (shown during workspace) -->
       <div class="nav-links nav-studio hidden" id="navStudio">
-        <span class="studio-project-name" id="studioProjectName">—</span>
         <div class="pipeline-status" id="navPipelineStatus">
           <span class="status-indicator" id="navStatusIndicator"></span>
           <span class="status-label" id="navPipelineLabel">Initializing</span>
         </div>
+        <button class="nav-btn-ghost stop-btn hidden" id="stopPipelineBtn" type="button"
+          onclick="stopPipeline()">Stop</button>
         <button class="nav-btn-ghost" id="navModelCfgBtn2" type="button">Models</button>
+        <div class="export-menu-wrap">
+          <button class="nav-btn-ghost" id="exportMenuBtn" type="button" aria-expanded="false">Export</button>
+          <div class="export-menu hidden" id="exportMenu" role="menu">
+            <button type="button" data-export="zip">Download project ZIP</button>
+            <button type="button" data-export="json">Export pipeline JSON</button>
+            <button type="button" data-export="markdown">Export report Markdown</button>
+          </div>
+        </div>
         <button class="nav-btn-ghost" onclick="exitStudio()" type="button">Exit</button>
       </div>
 
@@ -201,6 +211,13 @@
 
       <div class="sb-section-label">Project</div>
       <nav class="sb-nav" aria-label="Project views">
+        <button class="sb-item" data-view="projects" onclick="switchView('projects')" type="button">
+          <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4.5h4l1.5 1.5H14v7H2v-8.5z" stroke="currentColor" stroke-width="1.2" />
+            <path d="M2 4.5V3h4l1.5 1.5" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+          Previous Projects
+        </button>
         <button class="sb-item" data-view="artifacts" onclick="switchView('artifacts')" type="button">
           <svg class="sb-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M3 2h7l4 4v9H3V2z" stroke="currentColor" stroke-width="1.2" />
@@ -242,7 +259,28 @@
 
     <!-- Main content area -->
     <main class="studio-main" id="studioMain">
+      <section id="liveWorkspacePanel" class="live-workspace-panel hidden" aria-live="polite">
+        <div class="live-workspace-head">
+          <div>
+            <div class="live-kicker">CODE AGENT / LIVE WORKSPACE</div>
+            <h2>Generated source</h2>
+            <p id="liveWorkspaceStatus">Waiting for generated files…</p>
+          </div>
+          <span class="live-workspace-indicator"><i></i><span id="liveWorkspaceBadge">Waiting</span></span>
+        </div>
+        <div class="live-workspace-grid">
+          <aside class="live-file-list" id="liveFileList">
+            <div class="live-empty">Files will appear here when the Code Agent saves them.</div>
+          </aside>
+          <div class="live-editor">
+            <div class="live-editor-tab" id="liveEditorTab">No file selected</div>
+            <pre id="liveEditorContent">// Real generated source will appear here.
+// This panel never substitutes demo code.</pre>
+          </div>
+        </div>
+      </section>
       <div id="view-overview" class="studio-view"></div>
+      <div id="view-projects" class="studio-view hidden"></div>
       <div id="view-requirement" class="studio-view hidden"></div>
       <div id="view-design" class="studio-view hidden"></div>
       <div id="view-code" class="studio-view hidden"></div>

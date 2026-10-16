@@ -8,7 +8,7 @@ from langchain_ollama import ChatOllama
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from typing import Any, Type, TypeVar, TypedDict, Annotated, Sequence
+from typing import Any, Literal, Type, TypeVar, TypedDict, Annotated, Sequence
 from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
@@ -114,10 +114,44 @@ class _TrackedLLM:
         return getattr(self._llm, name)
 
 
-def get_llm(agent_type: str = "requirement", max_tokens: int = 4000):
+def get_llm(
+    agent_type: str = "requirement",
+    max_tokens: int = 4000,
+    provider: Literal["ollama", "groq"] = "ollama",
+):
     """
-    All LLM-backed agents: local Ollama
+    Build a tracked LLM for Ollama agents, with Groq available for targeted retries.
     """
+    if provider == "groq":
+        if agent_type != "code":
+            raise ValueError("The Groq provider is currently supported only for the code agent.")
+        if not os.environ.get("GROQ_API_KEY"):
+            raise RuntimeError(
+                "GROQ_API_KEY is required for the Groq code retry. Add it to the project .env file."
+            )
+        try:
+            from langchain_groq import ChatGroq
+        except ImportError as exc:
+            raise RuntimeError(
+                "The Groq provider package is missing. Install it with "
+                "`pip install -r requirements-groq.txt`."
+            ) from exc
+
+        selected_model = os.environ.get("GROQ_CODE_MODEL", "llama-3.3-70b-versatile")
+        usage = _TOKEN_USAGE.setdefault(agent_type, {
+            "model": selected_model, "calls": 0,
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        })
+        usage["model"] = selected_model
+        return _TrackedLLM(ChatGroq(
+            model=selected_model,
+            max_tokens=max_tokens,
+            temperature=0,
+        ), agent_type)
+
+    if provider != "ollama":
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
     if agent_type in OLLAMA_AGENTS:
         selected_model = _RUNTIME_MODELS.get(agent_type) or OLLAMA_MODEL
         usage = _TOKEN_USAGE.setdefault(agent_type, {

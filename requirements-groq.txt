@@ -1,0 +1,2 @@
+# Optional provider used for code rework after a rejected review.
+langchain-groq>=1.1.3,<2

@@ -1,9 +1,9 @@
 import os
-import shutil
 import subprocess
 import base64
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit
 
 try:
     from State_definition import AgentState
@@ -12,13 +12,55 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
 
 
 def _git(project_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(project_dir),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git {' '.join(args[:2])} timed out after 120 seconds") from exc
+
+
+def _normalize_github_repo_url(value: str) -> str:
+    """Accept owner/repo, HTTPS, or SSH GitHub remotes and return HTTPS clone URL."""
+    repo = value.strip()
+    if not repo:
+        raise ValueError("Repository URL is required.")
+
+    if repo.startswith("git@github.com:"):
+        repo = f"https://github.com/{repo.removeprefix('git@github.com:')}"
+    elif "://" not in repo:
+        if repo.count("/") == 1:
+            repo = f"https://github.com/{repo}"
+        else:
+            raise ValueError("Enter a GitHub URL or owner/repo.")
+
+    parsed = urlsplit(repo)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "github.com"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Repository must be a GitHub URL without embedded credentials.")
+
+    parts = parsed.path.strip("/").removesuffix(".git").split("/")
+    if (
+        len(parts) != 2
+        or any(not part or part in {".", ".."} for part in parts)
+        or any(not all(char.isalnum() or char in "-_." for char in part) for part in parts)
+    ):
+        raise ValueError("Enter a GitHub repository URL in the form owner/repo.")
+
+    owner, name = parts
+    return f"https://github.com/{owner}/{name}.git"
 
 
 def _next_release_version(state: AgentState) -> int:
@@ -95,10 +137,8 @@ def Release_Agent(state: AgentState) -> dict:
         or os.environ.get("GITHUB_REMOTE_URL")
         or "https://github.com/ShivarajChougala15/temp.git"
     )
-    os.environ["GITHUB_REPO_URL"] = repo_url
-    os.environ["GITHUB_REMOTE_URL"] = repo_url
-
     try:
+        repo_url = _normalize_github_repo_url(repo_url)
         if not (project_dir / ".git").exists():
             init_result = _git(project_dir, "init")
             if init_result.returncode != 0:
@@ -153,9 +193,7 @@ def Release_Agent(state: AgentState) -> dict:
                 )
             raise RuntimeError(f"git push failed: {push_error}")
 
-        # Successfully pushed to GitHub -> remove project folder from disk
-        shutil.rmtree(project_dir)
-        print(f"  [Release Agent] Successfully pushed to GitHub. Removed project folder from disk: {project_dir}")
+        print(f"  [Release Agent] Successfully pushed project to GitHub: {repo_url}")
 
         return {
             "release": {
@@ -163,7 +201,7 @@ def Release_Agent(state: AgentState) -> dict:
                 "project_id": project_id,
                 "project_path": str(project_dir),
                 "remote_url": repo_url,
-                "deleted_from_disk": True,
+                "deleted_from_disk": False,
                 "pushed_to_github": True,
             },
             "release_version": _next_release_version(state),
@@ -171,7 +209,7 @@ def Release_Agent(state: AgentState) -> dict:
             "workflow_status": "released",
         }
 
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"  [Release Agent] Git release failed: {exc}. Preserving project files on disk at: {project_dir}")
         return {
             "release": {

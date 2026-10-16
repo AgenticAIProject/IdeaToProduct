@@ -43,3 +43,6 @@ SAFETY
 STACK
 - Python: pytest. JavaScript: node:test + node:assert + node:fs (CommonJS). Go: testing. Java: JUnit.
 - Follow the stack playbook if one is provided.
+
+CRITICAL PERSISTENCE FIXTURES:
+If the project under test relies on database operations or storage engine data, your test validation fixtures MUST seed realistic mock records directly into the testing database immediately after resetting its structural state. Do not run assertions checking for record presence (`len() > 0`) against a completely empty database instance.

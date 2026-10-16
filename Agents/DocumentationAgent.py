@@ -13,6 +13,7 @@ class DocumentationDocument(BaseModel):
     architecture_overview: str = Field(
         description="Technical architecture document in Markdown. Explain only the supplied components, interactions, data entities, technologies, decisions, and edge cases. Do not invent components or infrastructure."
     )
+    
     user_guide: str = Field(
         description="User-facing Markdown guide organized only around the supplied actors and implemented V1 workflows. Do not invent personas or capabilities."
     )
