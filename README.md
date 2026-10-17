@@ -118,13 +118,13 @@ The Design Agent converts the requirements into an implementation-oriented syste
 
 The Code Agent implements the system described by the design. Repository scaffolding and code-generation tools are used to create and modify the project workspace.
 
-The initial implementation is generated with Ollama. If the Review Agent rejects it, the targeted code rework uses Groq instead. Configure `GROQ_API_KEY` in `.env`; `GROQ_CODE_MODEL` is optional and defaults to `llama-3.3-70b-versatile`. Install the optional integration with:
+The initial implementation is generated with Ollama. If the Review Agent rejects it, the targeted code rework uses Groq instead and receives the review findings and test output. Configure `GROQ_API_KEY` in `.env`; `GROQ_CODE_MODEL` is optional and defaults to `openai/gpt-oss-120b`. Install the optional integration with:
 
 ```bash
 pip install -r requirements-groq.txt
 ```
 
-The Test and Review Agents continue to use Ollama. A missing Groq key, package, or provider failure is surfaced as a pipeline error rather than silently retrying with Ollama.
+The Test and Review Agents continue to use Ollama. If Groq is unavailable during a code retry, the failed call falls back to the configured Ollama model and logs that fallback.
 
 ---
 

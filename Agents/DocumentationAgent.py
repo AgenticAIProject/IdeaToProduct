@@ -5,7 +5,7 @@ from State_definition import AgentState
 
 class DocumentationDocument(BaseModel):
     readme: str = Field(
-        description="Comprehensive project README in Markdown. Include only facts supported by the supplied artifacts: problem statement, V1 features, setup, exact run command, exact test command, testing status, and known issues."
+        description="Comprehensive project README in Markdown. Include only facts supported by the supplied artifacts: problem statement, requirements, design, V1 features, setup, exact run command, exact test command, testing status, and known issues. Organize requirements and design with clear headings, tables, and bullet lists."
     )
     api_reference: str = Field(
         description="Detailed API and module reference in Markdown. Document only endpoints, functions, classes, arguments, and response models visible in the supplied design and source code. For frontend-only projects, document public UI behavior instead of inventing APIs."

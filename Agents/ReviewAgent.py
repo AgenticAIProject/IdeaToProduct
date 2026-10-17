@@ -151,9 +151,21 @@ def Review_Agent(state: imports.AgentState) -> dict:
         print("  [Review Agent] Activating deterministic review fallback...")
         response = generate_review_fallback(state)
 
-    # Test results are evidence for the review, not a separate approval gate.
-    # Preserve an explicit LLM approval and also approve scores at or above 5.
-    response.approved = bool(response.approved or response.overall_score >= 5)
+    # A review cannot approve artifacts with blocking defects or failed tests,
+    # even when a small model returns an optimistic score.
+    test_results = state.get("test_results", {})
+    code_validation_errors = state.get("code", {}).get("validation_errors", {})
+    has_test_failures = (
+        test_results.get("success") is False
+        and test_results.get("execution_status") not in ("docker_unavailable",)
+    )
+    response.approved = bool(
+        response.approved
+        and not response.defects
+        and not code_validation_errors
+        and not has_test_failures
+        and response.overall_score >= 5
+    )
 
     output_review = response.model_dump()
     approval_status = "approved" if response.approved else "rejected"

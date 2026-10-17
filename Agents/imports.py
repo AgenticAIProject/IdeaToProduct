@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 OLLAMA_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+GROQ_CODE_MODEL = os.environ.get("GROQ_CODE_MODEL", "llama-3.1-8b-instant")
 _RUNTIME_MODELS: dict[str, str] = {}
 _TOKEN_USAGE: dict[str, dict[str, int | str]] = {}
 
@@ -76,12 +77,31 @@ def get_token_usage(agent_type: str) -> dict:
     return dict(current)
 
 
+def _estimate_input_tokens(value: Any) -> int:
+    """Approximate prompt tokens when the provider does not return them before invoke."""
+    if isinstance(value, list):
+        value = "\n".join(str(getattr(item, "content", item)) for item in value)
+    return max(1, (len(str(value)) + 3) // 4)
+
+
+def _log_request(agent_type: str, provider: str, model: str, args: tuple, kwargs: dict, output_limit: int) -> None:
+    prompt = args[0] if args else kwargs.get("input", "")
+    print(
+        f"  [LLM request] agent={agent_type} provider={provider} model={model} "
+        f"input~{_estimate_input_tokens(prompt)} output_limit={output_limit}"
+    )
+
+
 class _TrackedRunnable:
-    def __init__(self, runnable: Any, agent_type: str):
+    def __init__(self, runnable: Any, agent_type: str, provider: str, model: str, output_limit: int):
         self._runnable = runnable
         self._agent_type = agent_type
+        self._provider = provider
+        self._model = model
+        self._output_limit = output_limit
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        _log_request(self._agent_type, self._provider, self._model, args, kwargs, self._output_limit)
         response = self._runnable.invoke(*args, **kwargs)
         if isinstance(response, dict) and response.get("raw") is not None:
             _record_token_usage(self._agent_type, response["raw"])
@@ -97,9 +117,22 @@ class _TrackedLLM:
     def __init__(self, llm: Any, agent_type: str):
         self._llm = llm
         self._agent_type = agent_type
+        self.provider = "ollama" if isinstance(llm, ChatOllama) else "groq"
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
-        response = self._llm.invoke(*args, **kwargs)
+        _log_request(
+            self._agent_type, self.provider,
+            getattr(self._llm, "model", None) or getattr(self._llm, "model_name", "llm"),
+            args, kwargs, int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "num_predict", 0) or 0),
+        )
+        try:
+            response = self._llm.invoke(*args, **kwargs)
+        except Exception:
+            fallback_llm = _ollama_fallback(self)
+            if fallback_llm is None:
+                raise
+            print("  [LLM] Provider call failed; falling back to Ollama.")
+            return fallback_llm.invoke(*args, **kwargs)
         _record_token_usage(self._agent_type, response)
         return response
 
@@ -108,6 +141,9 @@ class _TrackedLLM:
         return _TrackedRunnable(
             self._llm.with_structured_output(*args, **kwargs),
             self._agent_type,
+            self.provider,
+            getattr(self._llm, "model", None) or getattr(self._llm, "model_name", "llm"),
+            int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "num_predict", 0) or 0),
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -137,7 +173,7 @@ def get_llm(
                 "`pip install -r requirements-groq.txt`."
             ) from exc
 
-        selected_model = os.environ.get("GROQ_CODE_MODEL", "llama-3.3-70b-versatile")
+        selected_model = GROQ_CODE_MODEL
         usage = _TOKEN_USAGE.setdefault(agent_type, {
             "model": selected_model, "calls": 0,
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
@@ -167,6 +203,22 @@ def get_llm(
 
     raise ValueError(
         f"Unknown agent type '{agent_type}'. Expected one of: {sorted(OLLAMA_AGENTS)}"
+    )
+
+
+def _ollama_fallback(llm: Any, max_tokens: int | None = None) -> Any:
+    """Return Ollama for a failed non-Ollama call, preserving the agent budget."""
+    if getattr(llm, "provider", "ollama") == "ollama":
+        return None
+    agent_type = getattr(llm, "_agent_type", "code")
+    return get_llm(
+        agent_type=agent_type,
+        max_tokens=max_tokens or int(
+            getattr(llm._llm, "max_tokens", None)
+            or getattr(llm._llm, "num_predict", 4000)
+            or 4000
+        ),
+        provider="ollama",
     )
 
 
@@ -287,6 +339,11 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 3
                 raise RuntimeError(_rate_limit_message(exc)) from exc
             last_err = exc
             print(f"  [invoke_structured] JSON fallback attempt {attempt + 1}/{max_retries} failed: {exc}")
+
+    fallback_llm = _ollama_fallback(llm)
+    if fallback_llm is not None:
+        print("  [invoke_structured] Provider failed; falling back to Ollama.")
+        return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
 
     raise RuntimeError(
         f"Structured output for {schema.__name__} failed after native and JSON strategies. "

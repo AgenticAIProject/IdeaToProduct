@@ -1,4 +1,5 @@
 import json
+import re
 import imports
 from pydantic import BaseModel, Field
 from State_definition import AgentState
@@ -170,6 +171,45 @@ def _tech(design: dict, category: str) -> str:
     return ""
 
 
+def _requested_language(requirements: dict) -> str:
+    """Return an explicitly requested implementation language, if one is present."""
+    values = [str(requirements.get("problem_statement", ""))]
+    for key in ("constraints", "assumptions", "in_scope"):
+        for item in requirements.get(key, []):
+            values.append(str(item.get("description", item) if isinstance(item, dict) else item))
+    text = " ".join(values).lower()
+    languages = (
+        ("typescript", "TypeScript"), ("javascript", "JavaScript"), ("c++", "C++"),
+        ("rust", "Rust"), ("golang", "Go"), (" go ", "Go"), ("java", "Java"),
+        ("python", "Python"), ("kotlin", "Kotlin"), ("swift", "Swift"),
+        ("c#", "C#"), ("ruby", "Ruby"), ("php", "PHP"),
+    )
+    for marker, language in languages:
+        if re.search(rf"(?<![a-z]){re.escape(marker.strip())}(?![a-z])", text):
+            return language
+    return ""
+
+
+def _enforce_requested_language(design: dict, requirements: dict) -> None:
+    requested = _requested_language(requirements)
+    if not requested:
+        return
+    choices = design.setdefault("technology_choices", [])
+    language_choice = next(
+        (choice for choice in choices if str(choice.get("category", "")).lower() == "language"),
+        None,
+    )
+    if language_choice is None:
+        choices.insert(0, {
+            "category": "language",
+            "technology": requested,
+            "reason": "Explicitly requested by the user requirements.",
+        })
+    elif str(language_choice.get("technology", "")).strip().lower() != requested.lower():
+        language_choice["technology"] = requested
+        language_choice["reason"] = "Explicitly requested by the user requirements."
+
+
 def normalize_design(design: dict, requirements: dict) -> dict:
     """
     Deterministic consistency pass. Small LLMs often return contradictory designs
@@ -178,6 +218,7 @@ def normalize_design(design: dict, requirements: dict) -> dict:
     as a design decision so nothing happens silently.
     """
     changes = []
+    _enforce_requested_language(design, requirements)
     choices = design.get("technology_choices", [])
     backend = _tech(design, "backend").lower()
     frontend = _tech(design, "frontend").lower()

@@ -429,8 +429,16 @@ def Code_Agent(state: AgentState) -> dict:
     provider: Literal["ollama", "groq"] = "groq" if is_review_retry else "ollama"
     if is_review_retry:
         print("  [Code Agent] Review rejected the first implementation; using Groq for the targeted rework.")
-    llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
-    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
+    try:
+        llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
+        plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
+    except Exception as exc:
+        if provider != "groq":
+            raise
+        print(f"  [Code Agent] Groq unavailable ({exc}); falling back to Ollama.")
+        provider = "ollama"
+        llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
+        plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
 
     written: dict[str, str] = {}
     meta: dict[str, FilePlan] = {}

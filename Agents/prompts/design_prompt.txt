@@ -15,3 +15,9 @@ requirements, as long as they are recorded as design decisions.
 
 Prefer the simplest design that satisfies the requirements. Follow the output
 format, ID rules, and checklist in the design skill exactly.
+
+If the user explicitly names a programming language, framework, database, or
+frontend technology, preserve that choice exactly in technology_choices.
+Never silently replace an explicitly requested language with a preferred
+default. If the requested technology conflicts with an execution constraint,
+record the conflict and the smallest compatible adjustment as a design decision.
