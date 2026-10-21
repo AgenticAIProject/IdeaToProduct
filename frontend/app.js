@@ -819,20 +819,26 @@ function buildActivityFeed(events) {
 window.switchView = function (viewId) {
   State.currentView = viewId;
 
-  // Close mobile sidebar
   $('studioSidebar')?.classList.remove('open');
   $('mobileSidebarOverlay')?.classList.add('hidden');
 
-  // Update sidebar highlight
   document.querySelectorAll('.sb-item, .sb-stage-item').forEach(el => {
-    const matches = el.dataset.view === viewId || el.dataset.stage === viewId;
+    const matches =
+      el.dataset.view === viewId ||
+      el.dataset.stage === viewId;
+
     el.classList.toggle('active', matches);
   });
 
-  // Show/hide view panels
   document.querySelectorAll('.studio-view').forEach(el => {
-    el.classList.toggle('hidden', el.id !== 'view-' + viewId);
+    el.classList.toggle('hidden', el.id !== `view-${viewId}`);
   });
+
+  const liveWorkspace = $('liveWorkspacePanel');
+
+  if (liveWorkspace) {
+    liveWorkspace.classList.toggle('hidden', viewId !== 'code');
+  }
 
   renderViewIfNeeded(viewId);
 };
@@ -2177,7 +2183,7 @@ async function refreshLiveWorkspace(statusData) {
     return;
   }
 
-  panel.classList.remove('hidden');
+  panel.classList.toggle('hidden', State.currentView !== 'code');
   liveWorkspacePollBusy = true;
   try {
     const response = await fetch(`${API}/api/workspace/${encodeURIComponent(State.sessionId)}`);
