@@ -1,4 +1,5 @@
 import imports
+import json
 from pydantic import BaseModel, Field
 from State_definition import AgentState
 
@@ -21,6 +22,52 @@ class DocumentationDocument(BaseModel):
         description="Markdown V1.0.0 changelog based only on implemented features and actual test/review status. Never claim all tests passed unless test_results confirms it."
     )
 
+
+
+def _markdown_label(value: str) -> str:
+    """Convert an artifact key into a readable Markdown label."""
+    return str(value).replace("_", " ").strip().capitalize()
+
+
+def _artifact_to_markdown(value, level: int = 3) -> str:
+    """Render requirement/design artifacts as readable Markdown without dropping fields."""
+    if value is None or value == "":
+        return "Not provided."
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            label = _markdown_label(key)
+            if isinstance(item, (dict, list)):
+                parts.append(f"{'#' * min(level, 6)} {label}\n\n{_artifact_to_markdown(item, level + 1)}")
+            else:
+                text = str(item).strip() if item is not None else "Not specified"
+                parts.append(f"- **{label}:** {text or 'Not specified'}")
+        return "\n\n".join(parts) if parts else "Not provided."
+    if isinstance(value, list):
+        if not value:
+            return "- None specified."
+        parts = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                parts.append(_artifact_to_markdown(item, level + 1))
+            else:
+                parts.append(f"- {str(item)}")
+        return "\n\n".join(parts)
+    return str(value)
+
+
+def _include_requirement_and_design_outputs(readme: str, requirements: dict, design: dict) -> str:
+    """Guarantee the generated README includes both upstream agent artifacts in full."""
+    readme = (readme or "").strip()
+    sections = [
+        "## Requirements Agent Output\n\n"
+        "The following is the structured output produced by the Requirement Agent.\n\n"
+        + _artifact_to_markdown(requirements),
+        "## Design Agent Output\n\n"
+        "The following is the structured output produced by the Design Agent.\n\n"
+        + _artifact_to_markdown(design),
+    ]
+    return (readme + "\n\n---\n\n" if readme else "") + "\n\n---\n\n".join(sections) + "\n"
 
 def Documentation_Agent(state: AgentState) -> dict:
     """
@@ -117,7 +164,13 @@ when the artifacts do not provide the information.
 
     if response.readme:
         readme_path = project_dir / "README.md"
-        readme_path.write_text(response.readme, encoding="utf-8")
+        complete_readme = _include_requirement_and_design_outputs(
+            response.readme,
+            requirements if isinstance(requirements, dict) else {},
+            design if isinstance(design, dict) else {},
+        )
+        readme_path.write_text(complete_readme, encoding="utf-8")
+        documentation_payload["readme"] = complete_readme
         written_doc_files.append("README.md")
 
     if response.api_reference:

@@ -34,3 +34,4 @@ RULES:
 - Do NOT invent features that are not in the requirements, design, or code.
 - Format all outputs with clean GitHub-flavored Markdown.
 - Return the structured documentation document adhering to the schema.
+IMPORTANT README REQUIREMENT: The saved README.md must include both the Requirement Agent output and Design Agent output. The application also appends their structured artifacts to the README after generation, so keep the main README readable and do not invent or alter artifact facts.
