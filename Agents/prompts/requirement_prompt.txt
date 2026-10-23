@@ -39,8 +39,7 @@ CONSTRAINTS / ASSUMPTIONS / OPEN QUESTIONS
 - Open questions are for unresolved items that could change the scope. They do not block this stage.
 
 IMPLEMENTATION BOUNDARY
-Do not choose languages, databases, frameworks, libraries, architecture, API design, schemas or deployment.
-The Design Agent does that.
+Do not invent arbitrary technical implementations. However, IF the user explicitly specifies a language, framework, or technology constraint (e.g. "in C", "in HTML/CSS", "in Python"), you MUST record it as a Constraint (e.g. CON-01: "The system must be built using C"). The Design Agent will follow it.
 
 VALIDATE BEFORE RETURNING
 Completeness, consistency, clarity, testability, traceability, no duplication, no implementation leakage.

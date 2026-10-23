@@ -104,23 +104,37 @@ class DesignDocument(BaseModel):
     )
 
 
-def generate_design_fallback(requirements: dict) -> DesignDocument:
+def generate_design_fallback(requirements: dict, idea: str = "") -> DesignDocument:
     """Deterministic fallback for DesignDocument when LLM fails or is unreachable."""
     problem = requirements.get("problem_statement", "Application")
-    problem_lower = problem.lower()
+    requested = _requested_language(requirements, idea)
+    problem_lower = (problem + " " + idea).lower()
 
-    # Determine system type
-    if any(k in problem_lower for k in ["frontend", "ui", "dashboard", "visualize", "interface", "web app"]):
+    # Determine system type and stack based on explicit language or problem keywords
+    if requested == "HTML/CSS" or any(k in problem_lower for k in ["html", "css", "frontend", "ui", "dashboard", "visualize", "interface", "web app"]):
         system_type = "Frontend Web Application"
         tech_choices = [
             TechnologyChoice(category="frontend", technology="HTML/CSS/JS", reason="Lightweight responsive client-side interface."),
-            TechnologyChoice(category="testing", technology="jest", reason="Standard frontend testing framework.")
+            TechnologyChoice(category="language", technology="JavaScript", reason="Client-side interactivity."),
+            TechnologyChoice(category="backend", technology="none", reason="Static frontend without backend server."),
+            TechnologyChoice(category="testing", technology="node:test", reason="Standard frontend testing framework.")
+        ]
+        api_endpoints = []
+        data_entities = []
+    elif requested in ("C", "C++"):
+        system_type = "CLI Application"
+        compiler = "gcc" if requested == "C" else "g++"
+        tech_choices = [
+            TechnologyChoice(category="language", technology=requested, reason=f"Explicitly requested {requested}."),
+            TechnologyChoice(category="backend", technology="none", reason=f"Standalone {requested} application."),
+            TechnologyChoice(category="testing", technology=compiler, reason=f"Standard {requested} test harness.")
         ]
         api_endpoints = []
         data_entities = []
     else:
         system_type = "Backend REST API"
         tech_choices = [
+            TechnologyChoice(category="language", technology="Python", reason="Modern high-performance backend language."),
             TechnologyChoice(category="backend", technology="FastAPI", reason="Modern high-performance async Python framework."),
             TechnologyChoice(category="database", technology="SQLite", reason="Self-contained local relational database."),
             TechnologyChoice(category="testing", technology="pytest", reason="Standard Python test framework.")
@@ -171,18 +185,27 @@ def _tech(design: dict, category: str) -> str:
     return ""
 
 
-def _requested_language(requirements: dict) -> str:
+def _requested_language(requirements: dict, idea: str = "") -> str:
     """Return an explicitly requested implementation language, if one is present."""
-    values = [str(requirements.get("problem_statement", ""))]
+    values = [str(requirements.get("problem_statement", "")), idea]
     for key in ("constraints", "assumptions", "in_scope"):
         for item in requirements.get(key, []):
             values.append(str(item.get("description", item) if isinstance(item, dict) else item))
     text = " ".join(values).lower()
+
+    if any(k in text for k in ("html and css", "html/css", "html5", "plain html", "html, css", "html css", "vanilla html")):
+        return "HTML/CSS"
+    if "c++" in text or "cpp" in text:
+        return "C++"
+    if re.search(r"\b(?:in\s+c\b|c\s+language|using\s+c\b|c\s+programming|\bc\s+code\b)", text) or re.search(r"(?<![a-z0-9_])c(?![a-z0-9_+#])", text):
+        if "c#" not in text:
+            return "C"
+
     languages = (
         ("typescript", "TypeScript"), ("javascript", "JavaScript"), ("c++", "C++"),
         ("rust", "Rust"), ("golang", "Go"), (" go ", "Go"), ("java", "Java"),
         ("python", "Python"), ("kotlin", "Kotlin"), ("swift", "Swift"),
-        ("c#", "C#"), ("ruby", "Ruby"), ("php", "PHP"),
+        ("c#", "C#"), ("ruby", "Ruby"), ("php", "PHP"), ("html", "HTML/CSS"),
     )
     for marker, language in languages:
         if re.search(rf"(?<![a-z]){re.escape(marker.strip())}(?![a-z])", text):
@@ -190,11 +213,61 @@ def _requested_language(requirements: dict) -> str:
     return ""
 
 
-def _enforce_requested_language(design: dict, requirements: dict) -> None:
-    requested = _requested_language(requirements)
+def _enforce_requested_language(design: dict, requirements: dict, idea: str = "") -> None:
+    requested = _requested_language(requirements, idea)
     if not requested:
         return
     choices = design.setdefault("technology_choices", [])
+
+    if requested == "HTML/CSS":
+        design["system_type"] = "Frontend Web Application"
+        frontend_choice = next((c for c in choices if str(c.get("category", "")).lower() == "frontend"), None)
+        if frontend_choice:
+            frontend_choice["technology"] = "HTML/CSS/JS"
+            frontend_choice["reason"] = "Explicitly requested HTML/CSS."
+        else:
+            choices.insert(0, {"category": "frontend", "technology": "HTML/CSS/JS", "reason": "Explicitly requested HTML/CSS."})
+        lang_choice = next((c for c in choices if str(c.get("category", "")).lower() == "language"), None)
+        if lang_choice:
+            lang_choice["technology"] = "JavaScript"
+        else:
+            choices.append({"category": "language", "technology": "JavaScript", "reason": "Client-side interactivity."})
+        backend_choice = next((c for c in choices if str(c.get("category", "")).lower() == "backend"), None)
+        if backend_choice:
+            backend_choice["technology"] = "none"
+        else:
+            choices.append({"category": "backend", "technology": "none", "reason": "Client-side only application."})
+        test_choice = next((c for c in choices if str(c.get("category", "")).lower() == "testing"), None)
+        if test_choice:
+            test_choice["technology"] = "node:test"
+        else:
+            choices.append({"category": "testing", "technology": "node:test", "reason": "node:test DOM verification."})
+        design["api_endpoints"] = []
+        design["data_entities"] = []
+        return
+
+    if requested in ("C", "C++"):
+        design["system_type"] = "CLI Application"
+        compiler = "gcc" if requested == "C" else "g++"
+        lang_choice = next((c for c in choices if str(c.get("category", "")).lower() == "language"), None)
+        if lang_choice:
+            lang_choice["technology"] = requested
+            lang_choice["reason"] = f"Explicitly requested {requested}."
+        else:
+            choices.insert(0, {"category": "language", "technology": requested, "reason": f"Explicitly requested {requested}."})
+        backend_choice = next((c for c in choices if str(c.get("category", "")).lower() == "backend"), None)
+        if backend_choice:
+            backend_choice["technology"] = "none"
+        else:
+            choices.append({"category": "backend", "technology": "none", "reason": "Standalone binary."})
+        test_choice = next((c for c in choices if str(c.get("category", "")).lower() == "testing"), None)
+        if test_choice:
+            test_choice["technology"] = compiler
+        else:
+            choices.append({"category": "testing", "technology": compiler, "reason": f"Standard {requested} test harness."})
+        design["api_endpoints"] = []
+        return
+
     language_choice = next(
         (choice for choice in choices if str(choice.get("category", "")).lower() == "language"),
         None,
@@ -210,7 +283,7 @@ def _enforce_requested_language(design: dict, requirements: dict) -> None:
         language_choice["reason"] = "Explicitly requested by the user requirements."
 
 
-def normalize_design(design: dict, requirements: dict) -> dict:
+def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
     """
     Deterministic consistency pass. Small LLMs often return contradictory designs
     (frontend-only app with an API and a database, React in a sandbox that cannot build it).
@@ -218,7 +291,7 @@ def normalize_design(design: dict, requirements: dict) -> dict:
     as a design decision so nothing happens silently.
     """
     changes = []
-    _enforce_requested_language(design, requirements)
+    _enforce_requested_language(design, requirements, idea)
     choices = design.get("technology_choices", [])
     backend = _tech(design, "backend").lower()
     frontend = _tech(design, "frontend").lower()
@@ -304,6 +377,7 @@ def Design_Agent(state: AgentState) -> dict:
     print("\nDesign Agent received requirements")
 
     requirements = state.get("requirements", {})
+    idea = state.get("idea", "")
 
     response = None
     try:
@@ -314,7 +388,7 @@ def Design_Agent(state: AgentState) -> dict:
         except OSError:
             print("  [Design Agent] skills/design_skill.txt not found - continuing with the prompt only.")
         messages.append(imports.HumanMessage(
-            content="Here are the requirements produced by the Requirement Agent:\n\n"
+            content=f"Original Product Idea:\n{idea}\n\nHere are the requirements produced by the Requirement Agent:\n\n"
                     + json.dumps(requirements, indent=1, ensure_ascii=False, default=str)
         ))
         result = imports.invoke_structured(llm, DesignDocument, messages)
@@ -322,13 +396,13 @@ def Design_Agent(state: AgentState) -> dict:
             response = result
         else:
             print("  [Design Agent] Structured response was empty or invalid — activating fallback.")
-            response = generate_design_fallback(requirements)
+            response = generate_design_fallback(requirements, idea)
     except Exception as e:
         print(f"  [Design Agent] Design LLM invocation issue: {e}")
         print("  [Design Agent] Activating design-driven fallback...")
-        response = generate_design_fallback(requirements)
+        response = generate_design_fallback(requirements, idea)
 
-    design = normalize_design(response.model_dump(), requirements)
+    design = normalize_design(response.model_dump(), requirements, idea)
 
     return {
         "design": design,

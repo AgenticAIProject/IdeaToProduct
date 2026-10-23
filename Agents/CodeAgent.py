@@ -91,6 +91,138 @@ def design_context(design: dict) -> str:
     return _compact({k: v for k, v in design.items() if v})
 
 
+def extract_file_interface(path: str, content: str) -> str:
+    """Extract public signatures, types, and exports instead of full source code to save context."""
+    ext = os.path.splitext(path)[1].lower()
+
+    # Python files: extract class/func signatures
+    if ext == ".py":
+        try:
+            tree = ast.parse(content)
+            signatures = []
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    args = ast.unparse(node.args) if hasattr(ast, "unparse") else "..."
+                    ret = f" -> {ast.unparse(node.returns)}" if getattr(node, "returns", None) and hasattr(ast, "unparse") else ""
+                    signatures.append(f"def {node.name}({args}){ret}: ...")
+                elif isinstance(node, ast.ClassDef):
+                    signatures.append(f"class {node.name}:")
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            args = ast.unparse(item.args) if hasattr(ast, "unparse") else "..."
+                            ret = f" -> {ast.unparse(item.returns)}" if getattr(item, "returns", None) and hasattr(ast, "unparse") else ""
+                            signatures.append(f"    def {item.name}({args}){ret}: ...")
+            if signatures:
+                return "\n".join(signatures)
+        except Exception:
+            lines = [line.strip() for line in content.splitlines() if line.strip().startswith(("def ", "class ", "@app."))]
+            if lines:
+                return "\n".join(lines[:30])
+        return content[:500]
+
+    # C / C++ files:
+    if ext in (".h", ".hpp"):
+        return content[:1500]
+    if ext in (".c", ".cpp", ".cc"):
+        lines = []
+        for line in content.splitlines():
+            s = line.strip()
+            if re.match(r"^[a-zA-Z_][a-zA-Z0-9_* ]+\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(.*\)", s):
+                clean = re.sub(r"\s*\{.*$", ";", s)
+                lines.append(clean)
+        if lines:
+            return "\n".join(lines)
+        return f"{path}: (C/C++ implementation)"
+
+    # HTML files: extract element IDs and form controls
+    if ext in (".html", ".htm"):
+        tags = re.findall(r'<(button|input|form|select|textarea|table|div)[^>]*id=["\']([^"\']+)["\'][^>]*>', content)
+        if tags:
+            return "HTML Elements:\n" + "\n".join(f"- <{t[0]} id=\"{t[1]}\">" for t in tags[:25])
+        ids = re.findall(r'id=["\']([^"\']+)["\']', content)
+        if ids:
+            return f"HTML element IDs: {ids[:25]}"
+        return f"{path}: (HTML structure)"
+
+    # JS files: extract exported functions
+    if ext in (".js", ".ts", ".mjs"):
+        lines = []
+        for line in content.splitlines():
+            s = line.strip()
+            if s.startswith(("function ", "const ", "let ", "exports.", "module.exports")):
+                lines.append(s[:100])
+        if lines:
+            return "\n".join(lines[:25])
+        return content[:500]
+
+    if os.path.basename(path).lower() in ("requirements.txt", "package.json"):
+        return content[:500]
+
+    return content[:300]
+
+
+def summarize_written_files(written: dict[str, str], current_path: str) -> str:
+    """Produce a compact interface summary of previously written files."""
+    parts = []
+    for path, content in written.items():
+        if path == current_path:
+            continue
+        interface = extract_file_interface(path, content)
+        parts.append(f"--- {path} (interfaces & signatures) ---\n{interface}")
+    return "\n\n".join(parts)
+
+
+def file_requirements_context(fp: FilePlan, req: dict) -> str:
+    """Keep requirements compact and focused for individual file generation."""
+    problem = req.get("problem_statement", "")
+    constraints = [c.get("description", c) if isinstance(c, dict) else str(c) for c in req.get("constraints", [])]
+
+    frs = req.get("functional_requirements", [])
+    acs = req.get("acceptance_criteria", [])
+
+    if fp.requirement_ids:
+        matched_frs = [f for f in frs if isinstance(f, dict) and f.get("id") in fp.requirement_ids]
+        matched_acs = [a for a in acs if isinstance(a, dict) and a.get("requirement_id") in fp.requirement_ids]
+    else:
+        matched_frs = frs[:5]
+        matched_acs = acs[:8]
+
+    compact_data = {
+        "problem": problem,
+        "constraints": constraints,
+        "functional_requirements": [
+            f"{f.get('id', '')}: {f.get('description', '')}" if isinstance(f, dict) else str(f)
+            for f in (matched_frs or frs[:6])
+        ],
+        "acceptance_criteria": [
+            f"{a.get('requirement_id', '')}: {a.get('description', '')}" if isinstance(a, dict) else str(a)
+            for a in (matched_acs or acs[:8])
+        ]
+    }
+    return json.dumps(compact_data, indent=1, ensure_ascii=False)
+
+
+def file_design_context(fp: FilePlan, design: dict) -> str:
+    """Keep design compact and relevant to the file being generated."""
+    tech = [
+        f"{c.get('category')}: {c.get('technology')}"
+        for c in design.get("technology_choices", [])
+        if isinstance(c, dict)
+    ]
+    compact = {
+        "system_type": design.get("system_type", ""),
+        "architecture": design.get("architecture", ""),
+        "technology_choices": tech,
+    }
+    if any(k in fp.path.lower() for k in ("app", "api", "route", "server", "main")):
+        if design.get("api_endpoints"):
+            compact["api_endpoints"] = [
+                f"{ep.get('method')} {ep.get('path')}: {ep.get('description')}"
+                for ep in design.get("api_endpoints", [])[:5] if isinstance(ep, dict)
+            ]
+    return json.dumps(compact, indent=1, ensure_ascii=False)
+
+
 def feedback_context(state: AgentState) -> str:
     """Review defects + the REAL failing test output (and the tests themselves)."""
     review = state.get("review") or {}
@@ -264,6 +396,92 @@ def check_cross_file(files: dict[str, str]) -> list[str]:
     return sorted(set(problems))
 
 
+def ensure_requirements_txt(written: dict[str, str], plan: CodePlan, project_id: str) -> None:
+    """Ensure requirements.txt exists and contains all imported third-party modules."""
+    import sys
+    is_python_project = (
+        getattr(plan, "language", "").lower() == "python"
+        or any(p.endswith(".py") for p in written.keys())
+        or any(f.path.endswith(".py") for f in getattr(plan, "files", []))
+    )
+    if not is_python_project:
+        return
+
+    stdlib = set(getattr(sys, "stdlib_module_names", set()))
+    stdlib.update({
+        "os", "sys", "re", "json", "time", "datetime", "math", "random", "typing", "collections",
+        "itertools", "functools", "pathlib", "sqlite3", "subprocess", "tempfile", "shutil", "ast",
+        "unittest", "http", "urllib", "logging", "hashlib", "base64", "uuid", "io", "copy", "threading",
+        "builtins", "abc", "contextlib", "dataclasses", "enum", "inspect", "operator", "string",
+    })
+
+    local_modules = {os.path.splitext(os.path.basename(p))[0] for p in written.keys()}
+    discovered_deps = set(plan.dependencies or [])
+
+    for p, content in written.items():
+        if not p.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(content)
+            for node in ast.walk(tree):
+                names = []
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    names = [node.module.split(".")[0]]
+                elif isinstance(node, ast.Import):
+                    names = [a.name.split(".")[0] for a in node.names]
+                for name in names:
+                    clean = name.lower()
+                    if clean not in stdlib and clean not in local_modules:
+                        discovered_deps.add(clean)
+        except Exception:
+            pass
+
+    package_map = {
+        "fastapi": "fastapi",
+        "pydantic": "pydantic",
+        "sqlalchemy": "sqlalchemy",
+        "requests": "requests",
+        "flask": "flask",
+        "uvicorn": "uvicorn",
+        "httpx": "httpx",
+        "dotenv": "python-dotenv",
+        "jose": "python-jose",
+        "jwt": "pyjwt",
+        "bcrypt": "bcrypt",
+        "pytest": "pytest",
+        "jinja2": "jinja2",
+    }
+
+    current_reqs = written.get("requirements.txt", "").strip()
+    existing_lines = {
+        re.split(r"[=<>]", line)[0].strip().lower()
+        for line in current_reqs.splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+    new_packages = set()
+    for dep in discovered_deps:
+        mapped = package_map.get(dep, dep)
+        if mapped not in existing_lines:
+            new_packages.add(mapped)
+
+    # If FastAPI is used, ensure uvicorn, pytest, httpx are included for tests
+    if "fastapi" in existing_lines or "fastapi" in new_packages:
+        for extra in ("uvicorn", "pytest", "httpx"):
+            if extra not in existing_lines:
+                new_packages.add(extra)
+
+    if new_packages or "requirements.txt" not in written or not written.get("requirements.txt", "").strip():
+        all_lines = [line.strip() for line in current_reqs.splitlines() if line.strip()]
+        for pkg in sorted(new_packages):
+            if pkg not in all_lines:
+                all_lines.append(pkg)
+        final_content = "\n".join(all_lines) + "\n"
+        written["requirements.txt"] = final_content
+        write_file_to_disk(project_id, "requirements.txt", final_content)
+        print(f"  [Code Agent] Ensured requirements.txt with dependencies: {sorted(existing_lines | new_packages)}")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # LLM helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -338,10 +556,12 @@ Set test_command for the project's language (python: 'pytest --tb=short -v')."""
     raise RuntimeError(f"Could not create a code plan: {last_err}")
 
 
-def generate_one_file(llm, fp: FilePlan, plan: CodePlan, req_ctx: str, design: dict,
+def generate_one_file(llm, fp: FilePlan, plan: CodePlan, requirements: dict, design: dict,
                       written: dict[str, str], existing: Optional[str] = None, feedback: str = "") -> str:
     plan_overview = "\n".join(f"- {f.path}: {f.purpose} | exports: {f.exports}" for f in plan.files)
-    already = "\n\n".join(f"--- {p} ---\n{c}" for p, c in written.items() if p != fp.path)
+    interfaces = summarize_written_files(written, fp.path)
+    file_req = file_requirements_context(fp, requirements)
+    file_des = file_design_context(fp, design)
 
     if existing is not None:
         task = (f"MODIFY the existing file `{fp.path}` to fix the problems below. Keep everything that works. "
@@ -350,18 +570,18 @@ def generate_one_file(llm, fp: FilePlan, plan: CodePlan, req_ctx: str, design: d
     else:
         task = f"Write the complete file `{fp.path}` ({fp.purpose}). Exports: {fp.exports}."
 
-    human = imports.HumanMessage(content=f"""=== REQUIREMENTS ===
-{req_ctx}
+    human = imports.HumanMessage(content=f"""=== REQUIREMENTS (FOR THIS COMPONENT) ===
+{file_req}
 
-=== DESIGN ===
-{design_context(design)}
+=== ARCHITECTURE & TECH CHOICES ===
+{file_des}
 
-=== FILE PLAN ===
+=== CODEBASE PLAN ===
 {plan_overview}
 run_command: {plan.run_command}
 
-=== OTHER FILES ALREADY WRITTEN (use their real names/signatures) ===
-{already or '(none yet)'}
+=== PREVIOUSLY GENERATED FILES (SIGNATURES & EXPORTS) ===
+{interfaces or '(none yet - this is the first file)'}
 
 === TASK ===
 {task}""")
@@ -378,9 +598,9 @@ def write_file_to_disk(project_id: str, relative_path: str, content: str) -> str
     return str(abs_path)
 
 
-def generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id: str, existing=None, feedback="") -> tuple[str, Optional[str]]:
+def generate_and_fix(llm, fp, plan, requirements, design, written, project_id: str, existing=None, feedback="") -> tuple[str, Optional[str]]:
     """Generate one file, validate it, repair with the real error up to MAX_REPAIR_ATTEMPTS."""
-    content = generate_one_file(llm, fp, plan, req_ctx, design, written, existing, feedback)
+    content = generate_one_file(llm, fp, plan, requirements, design, written, existing, feedback)
     write_file_to_disk(project_id, fp.path, content)
     error = validate_file(fp.path, content)
     attempt = 0
@@ -388,7 +608,7 @@ def generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id: str, e
         attempt += 1
         print(f"  [Code Agent] {fp.path} failed validation ({error[:120]}) - repair {attempt}/{MAX_REPAIR_ATTEMPTS}")
         content = generate_one_file(
-            llm, fp, plan, req_ctx, design, written,
+            llm, fp, plan, requirements, design, written,
             existing=content,
             feedback=f"Validation error: {error}\nReturn the complete corrected file.",
         )
@@ -400,6 +620,66 @@ def generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id: str, e
 def order_files(files: list[FilePlan]) -> list[FilePlan]:
     """Manifests last, so they can list the imports that were actually used."""
     return sorted(files, key=lambda f: os.path.basename(f.path).lower() in MANIFESTS)
+
+
+def expand_dependent_targets(targets: list[str], all_files: dict[str, str]) -> list[str]:
+    """Ensure any file dependent on or paired with changed files is also updated to prevent desynchronization."""
+    expanded = set(targets)
+    changed = True
+    while changed:
+        changed = False
+        for target in list(expanded):
+            target_base = os.path.splitext(os.path.basename(target))[0]
+            target_ext = os.path.splitext(target)[1].lower()
+
+            # 1. Frontend coupling: logic.js and app.js must stay in sync
+            if target == "logic.js" and "app.js" in all_files and "app.js" not in expanded:
+                expanded.add("app.js")
+                changed = True
+            elif target == "app.js" and "logic.js" in all_files and "logic.js" not in expanded:
+                expanded.add("logic.js")
+                changed = True
+
+            # 2. C / C++ coupling: .h and .c pairs, or files #including the target
+            elif target_ext in (".h", ".hpp"):
+                for ext in (".c", ".cpp", ".cc"):
+                    impl = target_base + ext
+                    if impl in all_files and impl not in expanded:
+                        expanded.add(impl)
+                        changed = True
+                for other_path, other_content in all_files.items():
+                    if other_path not in expanded and (f'"{target}"' in other_content or f'<{target}>' in other_content or target in other_content):
+                        expanded.add(other_path)
+                        changed = True
+            elif target_ext in (".c", ".cpp", ".cc"):
+                for ext in (".h", ".hpp"):
+                    hdr = target_base + ext
+                    if hdr in all_files and hdr not in expanded:
+                        expanded.add(hdr)
+                        changed = True
+
+            # 3. Python coupling: any file importing the modified module
+            elif target_ext == ".py":
+                for other_path, other_content in all_files.items():
+                    if other_path.endswith(".py") and other_path not in expanded:
+                        if re.search(rf"\b(?:from|import)\s+{re.escape(target_base)}\b", other_content):
+                            expanded.add(other_path)
+                            changed = True
+
+    # Upstream dependencies generated first so downstream files receive their updated signatures!
+    def _rank(p: str) -> int:
+        pl = p.lower()
+        if pl.endswith((".h", ".hpp")):
+            return 0
+        if any(k in pl for k in ("logic", "model", "schema")):
+            return 1
+        if any(k in pl for k in ("store", "service", "calc", "db")):
+            return 2
+        if any(k in pl for k in ("app", "main", "cli", "server", "view")):
+            return 3
+        return 4
+
+    return sorted(expanded, key=_rank)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -448,9 +728,22 @@ def Code_Agent(state: AgentState) -> dict:
         if not is_rework:
             # ── First pass: plan, then generate file by file ───────────────────
             plan = make_plan(plan_llm, req_ctx, design)
+            # Ensure requirements.txt is in the plan if this is a Python project
+            is_py = (
+                getattr(plan, "language", "").lower() == "python"
+                or any(f.path.endswith(".py") for f in plan.files)
+                or any("python" in str(c.get("technology", "")).lower() for c in design.get("technology_choices", []))
+            )
+            if is_py and not any(os.path.basename(f.path).lower() == "requirements.txt" for f in plan.files):
+                print("  [Code Agent] Python project detected; injecting requirements.txt into the file plan.")
+                plan.files.append(FilePlan(
+                    path="requirements.txt",
+                    purpose="List third-party Python package dependencies for pip install",
+                    exports=[],
+                ))
             print(f"  [Code Agent] Plan: {[f.path for f in plan.files]}")
             for fp in order_files(plan.files):
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id)
+                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id)
                 written[fp.path] = content
                 meta[fp.path] = fp
                 if err:
@@ -475,12 +768,13 @@ def Code_Agent(state: AgentState) -> dict:
                 print(f"  [Code Agent] File selection failed ({e}); regenerating all files.")
 
             targets = [p for p in (selection.paths_to_change if selection else []) if p in prev_files] or list(prev_files)
+            targets = expand_dependent_targets(targets, prev_files)
             new_files = selection.new_files if selection else []
-            print(f"  [Code Agent] Rework targets: {targets} (+{[f.path for f in new_files]} new)")
+            print(f"  [Code Agent] Rework targets (with dependencies): {targets} (+{[f.path for f in new_files]} new)")
 
             for p in targets:
                 fp = meta.get(p) or FilePlan(path=p, purpose="")
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id,
+                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id,
                                                 existing=prev_files[p], feedback=feedback)
                 written[p] = content
                 if err:
@@ -488,7 +782,7 @@ def Code_Agent(state: AgentState) -> dict:
             for fp in new_files:
                 plan.files.append(fp)
                 meta[fp.path] = fp
-                content, err = generate_and_fix(llm, fp, plan, req_ctx, design, written, project_id)
+                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id)
                 written[fp.path] = content
                 if err:
                     errors[fp.path] = err
@@ -509,6 +803,11 @@ def Code_Agent(state: AgentState) -> dict:
     c_compile_errors = validate_c_project(written)
     if c_compile_errors:
         errors["C project compile check"] = "\n".join(c_compile_errors)
+
+    # ── Ensure Python projects have a valid requirements.txt with all detected imports ──
+    ensure_requirements_txt(written, plan, project_id)
+    if "requirements.txt" in written and "requirements.txt" not in meta:
+        meta["requirements.txt"] = FilePlan(path="requirements.txt", purpose="Project dependencies", exports=[])
 
     cross = check_cross_file(written)
     notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]

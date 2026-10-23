@@ -1,6 +1,7 @@
 import os
 import re
 import ast
+import json
 import shutil
 import subprocess
 import tempfile
@@ -146,6 +147,64 @@ def _interfaces(code_files: list) -> str:
     return "\n".join(lines)
 
 
+def _compact_test_requirements(req: dict) -> str:
+    """Format requirements specifically for test case generation: Acceptance Criteria are primary."""
+    problem = req.get("problem_statement", "")
+    acs = req.get("acceptance_criteria", [])
+    frs = req.get("functional_requirements", [])
+
+    clean_acs = [
+        f"[{a.get('id', 'AC')}] (Validates {a.get('requirement_id', '')}): {a.get('description', '')}"
+        for a in acs if isinstance(a, dict)
+    ]
+    clean_frs = [
+        f"[{f.get('id', 'FR')}]: {f.get('description', '')}"
+        for f in frs if isinstance(f, dict)
+    ]
+    data = {
+        "problem": problem,
+        "acceptance_criteria_to_verify": clean_acs,
+        "functional_requirements": clean_frs[:6],
+    }
+    return json.dumps(data, indent=1, ensure_ascii=False)
+
+
+def _compact_test_design(design: dict) -> str:
+    """Format design for tests: endpoints, tech choices, edge cases."""
+    data = {
+        "system_type": design.get("system_type", ""),
+        "technology_choices": [
+            f"{c.get('category')}: {c.get('technology')}"
+            for c in design.get("technology_choices", []) if isinstance(c, dict)
+        ],
+        "api_endpoints": [
+            f"{ep.get('method')} {ep.get('path')} -> {ep.get('success_status', 200)}: {ep.get('description', '')}"
+            for ep in design.get("api_endpoints", []) if isinstance(ep, dict)
+        ],
+        "edge_cases": [
+            e.get("description", "") for e in design.get("edge_cases", []) if isinstance(e, dict)
+        ][:5]
+    }
+    return json.dumps(data, indent=1, ensure_ascii=False)
+
+
+def _compact_code_context(code_files: list) -> str:
+    from CodeAgent import extract_file_interface
+    parts = []
+    for f in code_files:
+        if not isinstance(f, dict):
+            continue
+        p = f.get("path", "")
+        c = f.get("content", "")
+        # If small file or header file, include directly
+        if len(c) <= 800 or p.endswith((".h", ".hpp")):
+            parts.append(f"--- File: {p} ---\n{c}")
+        else:
+            interface = extract_file_interface(p, c)
+            parts.append(f"--- File: {p} (Public Signatures & Exports) ---\n{interface}")
+    return "\n\n".join(parts)
+
+
 def Test_Agent(state: AgentState) -> dict:
     """
     Test Agent (Stage 4):
@@ -197,13 +256,15 @@ CRITICAL TESTING INSTRUCTIONS:
 2. Use CommonJS ('const ... = require(...)') and Node.js built-in modules ONLY: 'node:test', 'node:assert', and 'node:fs'.
 3. Do NOT use ESM syntax ('import ...', 'export ...'). Always use CommonJS require.
 4. Do NOT require third-party packages (e.g. jest, mocha, chai, jsdom, react-scripts) because tests run in a clean Node environment without external node_modules.
-5. Tests must exercise the REAL code: read the actual project files with fs (e.g. index.html, app.js) and assert
-   required elements/ids/functions from the requirements exist, or require() a CommonJS module if the code exports one.
-   NEVER assert on locally-defined mock objects - that proves nothing.
+5. Tests must exercise the REAL code:
+   - To verify HTML structure: read `index.html` with fs. Check stylesheets via `<link rel="stylesheet"` (NEVER assert `<script src="style.css">`). Check script tags via `<script src="logic.js">`.
+   - To verify logic: require('./logic.js') and ONLY test functions and properties that are explicitly listed in `module.exports`. NEVER guess or call unexported internal helper functions (such as `updateDisplay`).
+   - State isolation: Reset calculator/app state before each test case. Remember that pressing number buttons sequentially appends digits (e.g. '1' then '2' is '12').
    Skeleton:
    const test = require('node:test');
    const assert = require('node:assert');
    const fs = require('node:fs');
+   const logic = require('./logic.js');
 6. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
 7. NEVER generate Python code for a JavaScript frontend project!
 """
@@ -275,18 +336,22 @@ CRITICAL TESTING INSTRUCTIONS:
 
     llm = imports.get_llm(agent_type="test", max_tokens=4000)
     system_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/test_prompt.txt"))
-    files_context = "\n\n".join(f"--- File: {f.get('path')} ---\n{f.get('content')}" for f in code_files if isinstance(f, dict))
-    base_context = f"""=== REQUIREMENTS ===
-{requirements}
 
-=== DESIGN ===
-{design}
+    req_context = _compact_test_requirements(requirements)
+    design_context = _compact_test_design(design)
+    code_context = _compact_code_context(code_files)
 
-=== PUBLIC INTERFACES OF THE CODE (use these exact names) ===
+    base_context = f"""=== REQUIREMENTS & ACCEPTANCE CRITERIA ===
+{req_context}
+
+=== ARCHITECTURE & TECH CHOICES ===
+{design_context}
+
+=== PUBLIC INTERFACES / EXPORTS ===
 {_interfaces(code_files)}
 
-=== SOURCE CODE FILES ===
-{files_context}
+=== SOURCE CODE UNDER TEST (SIGNATURES & CODE) ===
+{code_context}
 
 {stack_guidelines}
 

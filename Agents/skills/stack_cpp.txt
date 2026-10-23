@@ -1,0 +1,14 @@
+## CODE
+Standalone C++ project (C++17), compiles with g++.
+- Modular architecture: Place class definitions and function declarations in header files (.hpp or .h) and implementation in .cpp files.
+- Put main() in a separate file (e.g. `main.cpp`). Keep core classes and logic in separate files so tests can link against them without duplicate main() symbol errors.
+- Include header guards (#pragma once or #ifndef ... #endif) in every header file.
+- Use standard C++17 standard library: <iostream>, <string>, <vector>, <memory>, <algorithm>, <stdexcept>.
+- No external packages or third-party dependencies required.
+
+## TEST
+Standard C++ test harness.
+- Target test file: `test_verification.cpp`
+- Include the project header files directly.
+- Call class methods and functions with valid and boundary inputs, asserting expected outputs.
+- Compile test harness with g++ -std=c++17 linking against project .cpp files (excluding main.cpp).

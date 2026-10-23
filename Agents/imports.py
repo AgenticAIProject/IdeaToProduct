@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 OLLAMA_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
-GROQ_CODE_MODEL = os.environ.get("GROQ_CODE_MODEL", "llama-3.1-8b-instant")
+GROQ_CODE_MODEL = os.environ.get("GROQ_CODE_MODEL", "openai/gpt-oss-120b")
 _RUNTIME_MODELS: dict[str, str] = {}
 _TOKEN_USAGE: dict[str, dict[str, int | str]] = {}
 
@@ -195,10 +195,12 @@ def get_llm(
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         })
         usage["model"] = selected_model
+        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
         return _TrackedLLM(ChatOllama(
             model=selected_model,
             base_url=OLLAMA_BASE_URL,
             num_predict=max_tokens,
+            num_ctx=num_ctx,
         ), agent_type)
 
     raise ValueError(

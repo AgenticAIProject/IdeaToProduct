@@ -1,0 +1,14 @@
+## CODE
+Standalone C project (C11), compiles with gcc.
+- Modular architecture: Place function prototypes and structs in header files (.h) and implementations in .c files.
+- Put main() in a separate file (e.g. `main.c`). Keep core logic in reusable translation units (e.g. `calculator.h`, `calculator.c`) so tests can link against them without multiple main() definition errors.
+- Include header guards (#ifndef CALC_H, #define CALC_H, #endif) in every .h file.
+- Use standard C11 library only: <stdio.h>, <stdlib.h>, <string.h>, <math.h>, <stdbool.h>, <errno.h>.
+- No external packages or third-party dependencies required.
+
+## TEST
+Standard C11 test harness using assert.h.
+- Target test file: `test_verification.c`
+- Include the project header files directly (e.g. #include "calculator.h").
+- Call functions with representative, edge-case, and boundary inputs using assert().
+- Compile test harness with gcc linking against all project .c files (excluding main.c).

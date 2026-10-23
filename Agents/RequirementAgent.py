@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, Field
 import imports
 from tools import fetch_github_grounding
@@ -172,6 +173,30 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     ])
 
     output_requirements = response.model_dump()
+
+    # Deterministically preserve user technology constraints if mentioned in idea
+    user_idea_raw = state.get("idea", "")
+    user_idea_lower = user_idea_raw.lower()
+    existing_constraints_text = " ".join(
+        str(c.get("description", "")) if isinstance(c, dict) else str(c)
+        for c in output_requirements.get("constraints", [])
+    ).lower()
+
+    def _ensure_constraint(text: str):
+        cid = f"CON-{len(output_requirements.get('constraints', [])) + 1:02d}"
+        output_requirements.setdefault("constraints", []).append({
+            "id": cid,
+            "description": text
+        })
+
+    if any(k in user_idea_lower for k in ("html", "css", "frontend", "web page", "website")) and not any(k in existing_constraints_text for k in ("html", "css", "frontend")):
+        _ensure_constraint("The application must be implemented using plain HTML, CSS, and client-side JavaScript.")
+    elif ("c++" in user_idea_lower or "cpp" in user_idea_lower) and not ("c++" in existing_constraints_text or "cpp" in existing_constraints_text):
+        _ensure_constraint("The application must be implemented in C++ (C++17 standard).")
+    elif (re.search(r"\b(?:in\s+c\b|c\s+language|using\s+c\b|c\s+programming|\bc\s+code\b)", user_idea_lower) or re.search(r"(?<![a-z0-9_])c(?![a-z0-9_+#])", user_idea_lower)) and not any(k in existing_constraints_text for k in ("in c", "c language", "c11")):
+        _ensure_constraint("The application must be implemented in C language (C11 standard).")
+    elif "python" in user_idea_lower and "python" not in existing_constraints_text:
+        _ensure_constraint("The application must be implemented in Python.")
 
     # ---------------------------------------------------------
     # 8. Return requirements with grounding evidence

@@ -1,19 +1,36 @@
 ## CODE
-Static frontend (HTML/CSS/JS), no build step, works by opening index.html.
-- Files: `index.html`, `style.css`, `logic.js`, `app.js`, plus a minimal `package.json`
-  (`{"name": "...", "version": "1.0.0", "scripts": {"test": "node --test"}}`).
-- `logic.js` holds ALL pure logic (validation, filtering, calculations, sorting) and NO DOM access.
-  It ends with:
-  `if (typeof module !== 'undefined' && module.exports) { module.exports = { fnA, fnB }; }`
-  Declare functions at top level (no import/export statements), so a browser <script> sees them and Node can require them.
-- `app.js` does DOM work only and calls the functions from logic.js. In index.html load logic.js BEFORE app.js.
-- No CDN, no frameworks, no network calls. Use embedded realistic sample data and in-memory state.
-- Give every interactive element a stable id named in the plan's exports (form, inputs, list/table, error area).
-- Handle empty state and validation errors visibly.
+Static frontend (HTML/CSS/JS), no build step, works directly by opening index.html in a web browser.
+- Files: `index.html`, `style.css`, `logic.js`, `app.js`, plus a minimal `package.json` (`{"name": "...", "version": "1.0.0", "scripts": {"test": "node --test"}}`).
+- Stylesheet link: In `index.html`, link CSS using `<link rel="stylesheet" href="style.css">`.
+- Script loading: In `index.html`, load logic before app:
+  `<script src="logic.js"></script>`
+  `<script src="app.js"></script>`
+- `logic.js` holds ALL pure logic (calculations, parsing, validation, operations) and NO DOM access.
+  End `logic.js` with dual Node/Browser export:
+  ```javascript
+  const _exports = { fnA, fnB, ... };
+  if (typeof module !== 'undefined' && module.exports) { module.exports = _exports; }
+  if (typeof window !== 'undefined') { window.logic = _exports; }
+  ```
+  Declare all functions at top level so both browser scripts and Node tests can access them.
+- `app.js` runs in the browser for DOM binding only.
+  CRITICAL RUNTIME RULE: NEVER write `const ... = require(...)` or `import` in `app.js`! `require()` does NOT exist in web browsers and will crash execution. In `app.js`, access logic directly from global scope or `window.logic`.
+- Complete Controls: Never omit essential controls (e.g. a calculator MUST include all digits `0` to `9` including `#zero`, plus clear, operators, and equals).
+- Stable IDs: Give every button, input, and display element a stable ID matching the plan's exports.
 
 ## TEST
-- CommonJS only: `const test = require('node:test'); const assert = require('node:assert'); const fs = require('node:fs');`
-- `const logic = require('./logic.js');` and test the exported pure functions with exact expected values
-  (valid, boundary, invalid inputs).
-- Read `index.html` with fs and assert that the elements/ids/script tags required by the acceptance criteria exist.
-- Do not try to run app.js or simulate the DOM.
+Test harness runs in Node.js using built-in modules:
+- CommonJS only:
+  `const test = require('node:test'); const assert = require('node:assert'); const fs = require('node:fs');`
+  `const logic = require('./logic.js');`
+- HTML verification:
+  - Check stylesheet link: `assert(html.includes('<link rel="stylesheet" href="style.css">') || html.includes('style.css'))`. NEVER assert `<script src="style.css">`!
+  - Check script tags: `assert(html.includes('<script src="logic.js"></script>'))` and `assert(html.includes('<script src="app.js"></script>'))`.
+  - Check key element IDs from the plan exports (e.g. display, buttons).
+- Strict Export Contract:
+  - Tests must ONLY call functions and access properties explicitly exported in `module.exports`.
+  - NEVER call unexported internal functions (e.g. do not guess `logic.updateDisplay()` or `performCalculation()` if not exported).
+- State Isolation:
+  - Reset state before each test case (e.g. call clear function).
+  - Account for sequential input behavior (e.g. clicking '1' then '2' produces '12', not '2').
+- Do not try to run app.js or simulate the DOM in node:test; test pure functions from logic.js and inspect index.html markup with fs.
