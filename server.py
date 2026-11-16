@@ -130,6 +130,16 @@ def run_release_thread(
             sessions[session_id]["error"] = str(exc)
 
 
+STAGE_TRANSITIONS = {
+    "requirements": "design",
+    "requirement": "design",
+    "design": "code",
+    "code": "test",
+    "test": "review",
+    "documentation": "release",
+}
+
+
 def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
     """Executes or resumes the LangGraph pipeline in a background worker thread."""
     config = {
@@ -215,7 +225,6 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 workflow_status = node_update.get("workflow_status", "running")
                 with sessions_lock:
                     session = sessions[session_id]
-                    session["stage"] = stage
                     session["result"] = dict(result)
                     if session.get("cancel_requested"):
                         session["is_running"] = False
@@ -223,6 +232,16 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                         return
                     if workflow_status == "waiting_for_user":
                         session["status"] = "clarification"
+                        session["stage"] = "clarification"
+                        session["is_running"] = False
+                    elif workflow_status == "running":
+                        if stage == "review":
+                            next_stage = "code" if node_update.get("approval_status") == "rejected" else "documentation"
+                        else:
+                            next_stage = STAGE_TRANSITIONS.get(stage, stage)
+                        session["stage"] = next_stage
+                    else:
+                        session["stage"] = stage
 
         if not result:
             raise RuntimeError("Pipeline produced no agent updates.")
@@ -291,7 +310,8 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
         if path == "/api/sessions/active":
             with sessions_lock:
                 active_session = next(
-                    (session for session in reversed(list(sessions.values())) if session.get("is_running")),
+                    (session for session in reversed(list(sessions.values()))
+                     if session.get("is_running") or session.get("status") == "clarification"),
                     None,
                 )
                 payload = {

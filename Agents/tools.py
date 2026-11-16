@@ -132,7 +132,8 @@ def test_runner(project_path: str) -> dict:
 # market_check (Grounded with Kaggle Startup Success Prediction dataset)
 # ──────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# Look for benchmark and grounding datasets in Agents/ first, then data/
+DATA_DIR = Path(__file__).resolve().parent if (Path(__file__).resolve().parent / "startup_success_benchmarks.json").exists() else Path(__file__).resolve().parent.parent / "data"
 
 @tool
 def market_check(idea: str) -> dict:
@@ -224,8 +225,38 @@ def github_issues_check(keywords: list[str]) -> dict:
     issues = []
     source = "gh_archive_samples"
 
-    # Attempt live GitHub search API first (short timeout, no auth needed)
-    if query:
+    # 1. Check curated local GH Archive dataset first (instant 0.001s, no network delay)
+    archive_path = DATA_DIR / "github_archive_samples.json"
+    if not archive_path.exists():
+        archive_path = Path(__file__).resolve().parent / "github_archive_samples.json"
+
+    if archive_path.exists():
+        try:
+            archive = json.loads(archive_path.read_text(encoding="utf-8"))
+            query_words = set(query.lower().split() + [kw.lower() for kw in keywords])
+            scored_issues = []
+            for entry in archive:
+                entry_kws = set(entry.get("keywords", []))
+                score = len(query_words.intersection(entry_kws))
+                if score > 0:
+                    scored_issues.append((score, entry))
+            if scored_issues:
+                scored_issues.sort(key=lambda x: x[0], reverse=True)
+                issues = [
+                    {
+                        "repo": item["repo"],
+                        "title": item["title"],
+                        "body": item["body"][:250],
+                        "labels": item["labels"]
+                    }
+                    for _, item in scored_issues[:3]
+                ]
+                source = "gh_archive_samples"
+        except Exception:
+            pass
+
+    # 2. If no local matches and query exists, attempt quick live GitHub search API
+    if not issues and query:
         try:
             encoded_q = urllib.parse.quote(f"{query} is:issue state:closed")
             url = f"https://api.github.com/search/issues?q={encoded_q}&sort=reactions&per_page=3"
@@ -233,7 +264,7 @@ def github_issues_check(keywords: list[str]) -> dict:
                 url,
                 headers={"User-Agent": "IdeaToProduct-Agent/1.0", "Accept": "application/vnd.github.v3+json"}
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 for item in data.get("items", [])[:3]:
                     issues.append({
@@ -245,33 +276,7 @@ def github_issues_check(keywords: list[str]) -> dict:
                 if issues:
                     source = "live_github_api"
         except Exception:
-            # Fall back to local GH Archive samples on network/rate-limit error
             pass
-
-    # Fallback to local curated GH Archive dataset
-    if not issues:
-        archive_path = DATA_DIR / "github_archive_samples.json"
-        if archive_path.exists():
-            try:
-                archive = json.loads(archive_path.read_text(encoding="utf-8"))
-                query_words = set(query.lower().split() + [kw.lower() for kw in keywords])
-                scored_issues = []
-                for entry in archive:
-                    entry_kws = set(entry.get("keywords", []))
-                    score = len(query_words.intersection(entry_kws))
-                    scored_issues.append((score, entry))
-                scored_issues.sort(key=lambda x: x[0], reverse=True)
-                issues = [
-                    {
-                        "repo": item["repo"],
-                        "title": item["title"],
-                        "body": item["body"][:250],
-                        "labels": item["labels"]
-                    }
-                    for _, item in scored_issues[:3]
-                ]
-            except Exception:
-                pass
 
     return {
         "query": query,

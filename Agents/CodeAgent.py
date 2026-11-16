@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -705,20 +706,11 @@ def Code_Agent(state: AgentState) -> dict:
     is_rework = bool(prev_files) and code_version > 1
     is_review_retry = is_rework and state.get("approval_status") == "rejected"
 
-    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "3000"))
-    provider: Literal["ollama", "groq"] = "groq" if is_review_retry else "ollama"
-    if is_review_retry:
-        print("  [Code Agent] Review rejected the first implementation; using Groq for the targeted rework.")
-    try:
-        llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
-        plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
-    except Exception as exc:
-        if provider != "groq":
-            raise
-        print(f"  [Code Agent] Groq unavailable ({exc}); falling back to Ollama.")
-        provider = "ollama"
-        llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
-        plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
+    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "4000"))
+    provider = os.environ.get("PROVIDER_CODE") or ("deepseek" if os.environ.get("DEEPSEEK_API_KEY") else ("groq" if os.environ.get("GROQ_API_KEY") else None))
+    print(f"  [Code Agent] Requesting provider: {provider or 'default'}")
+    llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
+    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
 
     written: dict[str, str] = {}
     meta: dict[str, FilePlan] = {}
@@ -748,6 +740,7 @@ def Code_Agent(state: AgentState) -> dict:
                 meta[fp.path] = fp
                 if err:
                     errors[fp.path] = err
+                time.sleep(1.0)  # Gentle pacing between file generations to stay below RPM limit
         else:
             # ── Rework: only touch the files that need it ──────────────────────
             plan = CodePlan(**previous["plan"]) if previous.get("plan") else None
@@ -779,6 +772,7 @@ def Code_Agent(state: AgentState) -> dict:
                 written[p] = content
                 if err:
                     errors[p] = err
+                time.sleep(1.0)
             for fp in new_files:
                 plan.files.append(fp)
                 meta[fp.path] = fp
@@ -786,6 +780,7 @@ def Code_Agent(state: AgentState) -> dict:
                 written[fp.path] = content
                 if err:
                     errors[fp.path] = err
+                time.sleep(1.0)
     except Exception as e:  # noqa: BLE001
         # No template fallback: surface the real failure.
         print(f"  [Code Agent] Generation failed: {e}")

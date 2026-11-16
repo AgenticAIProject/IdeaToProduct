@@ -81,7 +81,7 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
     # 1. Create LLM
     # ---------------------------------------------------------
 
-    llm = imports.get_llm(agent_type="requirement", max_tokens=3000)
+    llm = imports.get_llm(agent_type="requirement", max_tokens=4096)
 
     # ---------------------------------------------------------
     # 2. Build user input (include previous answers if any)

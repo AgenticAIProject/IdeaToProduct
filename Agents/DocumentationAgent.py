@@ -6,20 +6,24 @@ from State_definition import AgentState
 
 class DocumentationDocument(BaseModel):
     readme: str = Field(
-        description="Comprehensive project README in Markdown. Include only facts supported by the supplied artifacts: problem statement, requirements, design, V1 features, setup, exact run command, exact test command, testing status, and known issues. Organize requirements and design with clear headings, tables, and bullet lists."
+        default="",
+        description="Comprehensive project README in Markdown. Include problem statement, features overview, setup instructions, exact run and test commands, and known issues. Keep focused and structured with clear headings."
     )
     api_reference: str = Field(
-        description="Detailed API and module reference in Markdown. Document only endpoints, functions, classes, arguments, and response models visible in the supplied design and source code. For frontend-only projects, document public UI behavior instead of inventing APIs."
+        default="",
+        description="Concise API and module reference in Markdown. Document endpoints, key functions, arguments, and return types visible in the supplied design and code."
     )
     architecture_overview: str = Field(
-        description="Technical architecture document in Markdown. Explain only the supplied components, interactions, data entities, technologies, decisions, and edge cases. Do not invent components or infrastructure."
+        default="",
+        description="Technical architecture document in Markdown. Explain components, data models, technical decisions, and edge case strategies."
     )
-    
     user_guide: str = Field(
-        description="User-facing Markdown guide organized only around the supplied actors and implemented V1 workflows. Do not invent personas or capabilities."
+        default="",
+        description="User-facing Markdown guide with step-by-step instructions for the core implemented workflows."
     )
     changelog: str = Field(
-        description="Markdown V1.0.0 changelog based only on implemented features and actual test/review status. Never claim all tests passed unless test_results confirms it."
+        default="",
+        description="Markdown V1.0.0 release notes summarizing initial launch capabilities and verified tests."
     )
 
 
@@ -91,8 +95,8 @@ def Documentation_Agent(state: AgentState) -> dict:
 Description: {f.get('description', '')}
 Exports: {f.get('exports', [])}
 Requirement IDs: {f.get('requirement_ids', [])}
-Source:
-{(f.get('content') or '')[:12000]}"""
+Key code excerpt:
+{(f.get('content') or '')[:2000]}"""
             for f in code_files if isinstance(f, dict)
         )
     elif isinstance(code_files, dict):
@@ -103,7 +107,8 @@ Source:
         code_summary = ""
     code_summary = code_summary or "No code files provided."
 
-    llm = imports.get_llm(agent_type="documentation", max_tokens=5000)
+    max_tokens = int(os.environ.get("DOCS_MAX_TOKENS", "4000"))
+    llm = imports.get_llm(agent_type="documentation", max_tokens=max_tokens)
 
     doc_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/documentation_prompt.txt"))
 
@@ -133,10 +138,9 @@ Implementation notes: {code_artifact.get("implementation_notes", [])}
 === REVIEW FINDINGS ===
 {review}
 
-Generate the complete project documentation package. Treat the supplied
-requirements, design, source, test results, and review as authoritative.
-Do not fill missing facts with guesses; say "Not specified" or "Not applicable"
-when the artifacts do not provide the information.
+Generate the project documentation package (readme, api_reference, architecture_overview, user_guide, changelog).
+Keep each section clear, comprehensive, and focused (avoid unnecessary filler) so that all documents fit cleanly within output limits.
+Treat the supplied artifacts as authoritative.
 """
     )
 

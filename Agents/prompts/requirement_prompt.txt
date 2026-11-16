@@ -11,23 +11,20 @@ acceptance criteria, constraints, assumptions, in-scope, out-of-scope, open ques
 Express business rules as functional requirements (there is no separate field for them).
 
 V1 SIZE
-- Keep V1 small enough to implement in a handful of source files: roughly 3 to 8 Must functional requirements.
-- Move everything else to "Should/Could" or to out_of_scope. Do not add features merely because
-  similar products have them.
+- Keep V1 tightly scoped and concise: 3 to 5 Must functional requirements, 2 to 4 user stories, and 1 to 2 key non-functional requirements.
+- Keep each description concise (1-2 sentences) so the entire response fits comfortably within output token limits.
 
 USER STORIES
-"As a [role], I want [capability], so that [benefit]." Unique ID and priority (Must, Should, Could, Won't).
+"As a [role], I want [capability], so that [benefit]." Unique ID and priority (Must, Should). Keep concise.
 
 FUNCTIONAL REQUIREMENTS
-"The system shall ..." with unique ID, priority, and related user story IDs.
-One observable behavior per requirement.
+"The system shall ..." with unique ID, priority, and related user story IDs. Exactly 1 observable behavior per requirement.
 
 ACCEPTANCE CRITERIA (these drive both the code and the tests, so they must be exact)
-- Every functional requirement has at least one acceptance criterion referencing its id.
+- Provide exactly 1 concise acceptance criterion per functional requirement (total 3-5 criteria).
 - Use Given / When / Then with CONCRETE example data and the exact observable outcome.
   Good: "Given an expense of -5, When it is submitted, Then it is rejected with an error and the balance is unchanged."
-  Bad: "The system validates input properly."
-- State boundary values and error behavior explicitly (empty, zero, negative, duplicate, not found).
+- State boundary values and error behavior concisely.
 - Do not choose HTTP codes, frameworks, or storage here. Describe observable behavior only.
 
 NON-FUNCTIONAL REQUIREMENTS

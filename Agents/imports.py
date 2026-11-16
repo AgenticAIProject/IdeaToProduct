@@ -1,10 +1,13 @@
 import os
 import re
 import json
+import time
+import threading
 from pathlib import Path
 from State_definition import AgentState
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -24,13 +27,83 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 # ── Model configuration ──────────────────────────────────────────────────────
-# Every LLM-backed agent uses the local Ollama coding model.
-OLLAMA_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
+# Providers: "deepseek", "groq", "google", "ollama" (default: groq for speed & reliability)
+DEFAULT_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower().strip()
+GOOGLE_MODEL = os.environ.get("GEMINI_MODEL", os.environ.get("GOOGLE_MODEL", "gemini-3.8-flash"))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_CODE_MODEL = os.environ.get("GROQ_CODE_MODEL", "openai/gpt-oss-120b")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_CODE_MODEL = os.environ.get("DEEPSEEK_CODE_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+_ALL_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 _RUNTIME_MODELS: dict[str, str] = {}
 _TOKEN_USAGE: dict[str, dict[str, int | str]] = {}
+
+
+class GeminiKeyPool:
+    """Manages a pool of Google Gemini API keys with automatic rotation and 429 quota backoff."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._exhausted_until: dict[str, float] = {}
+        self._index = 0
+
+    def get_keys(self) -> list[str]:
+        keys = []
+        for var in ("GOOGLE_API_KEYS", "GEMINI_API_KEYS", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            val = os.environ.get(var, "").strip()
+            if val:
+                for k in val.split(","):
+                    k = k.strip().strip("'").strip('"')
+                    if k and k not in keys:
+                        keys.append(k)
+        for var, val in os.environ.items():
+            if (var.startswith("GOOGLE_API_KEY_") or var.startswith("GEMINI_API_KEY_")) and val.strip():
+                clean_k = val.strip().strip("'").strip('"')
+                if clean_k and clean_k not in keys:
+                    keys.append(clean_k)
+        return keys
+
+    def get_active_key(self) -> tuple[str | None, int]:
+        """Return (active_key, remaining_active_count)."""
+        with self._lock:
+            all_keys = self.get_keys()
+            if not all_keys:
+                return None, 0
+            now = time.time()
+            available = [k for k in all_keys if self._exhausted_until.get(k, 0) <= now]
+            if not available:
+                return None, 0
+            self._index = (self._index + 1) % len(available)
+            return available[self._index], len(available)
+
+    def mark_exhausted(self, key: str, penalty_seconds: float = 3600.0) -> None:
+        """Mark a key as quota-exhausted so requests immediately use the next key."""
+        with self._lock:
+            self._exhausted_until[key] = time.time() + penalty_seconds
+            masked = key[:6] + "..." + key[-4:] if len(key) > 10 else "***"
+            now = time.time()
+            active_count = sum(1 for k in self.get_keys() if self._exhausted_until.get(k, 0) <= now)
+            print(f"  [Gemini Key Pool] Key {masked} hit quota/429 limit; rotated away ({active_count} active keys remaining in pool).")
+
+    def reset(self) -> None:
+        with self._lock:
+            self._exhausted_until.clear()
+
+
+_GEMINI_KEY_POOL = GeminiKeyPool()
+
+
+def _default_model_name() -> str:
+    if DEFAULT_PROVIDER == "deepseek":
+        return DEEPSEEK_MODEL
+    elif DEFAULT_PROVIDER == "groq":
+        return GROQ_MODEL
+    elif DEFAULT_PROVIDER == "google":
+        return GOOGLE_MODEL
+    return OLLAMA_MODEL
 
 
 def _usage_from_response(response: Any) -> dict[str, int]:
@@ -59,7 +132,7 @@ def _usage_from_response(response: Any) -> dict[str, int]:
 def _record_token_usage(agent_type: str, response: Any) -> None:
     usage = _usage_from_response(response)
     current = _TOKEN_USAGE.setdefault(agent_type, {
-        "model": OLLAMA_MODEL, "calls": 0,
+        "model": _default_model_name(), "calls": 0,
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
     })
     current["calls"] = int(current["calls"]) + 1
@@ -71,7 +144,7 @@ def get_token_usage(agent_type: str) -> dict:
     current = _TOKEN_USAGE.get(agent_type)
     if not current:
         return {
-            "model": OLLAMA_MODEL, "calls": 0,
+            "model": _default_model_name(), "calls": 0,
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         }
     return dict(current)
@@ -114,24 +187,36 @@ class _TrackedRunnable:
 
 
 class _TrackedLLM:
-    def __init__(self, llm: Any, agent_type: str):
+    def __init__(self, llm: Any, agent_type: str, provider: str = "google", is_fallback: bool = False):
         self._llm = llm
         self._agent_type = agent_type
-        self.provider = "ollama" if isinstance(llm, ChatOllama) else "groq"
+        self.provider = provider
+        self.is_fallback = is_fallback
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
         _log_request(
             self._agent_type, self.provider,
             getattr(self._llm, "model", None) or getattr(self._llm, "model_name", "llm"),
-            args, kwargs, int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "num_predict", 0) or 0),
+            args, kwargs, int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "max_output_tokens", 0) or getattr(self._llm, "num_predict", 0) or 0),
         )
         try:
             response = self._llm.invoke(*args, **kwargs)
-        except Exception:
-            fallback_llm = _ollama_fallback(self)
+        except Exception as exc:
+            if self.provider == "google" and _is_rate_limit_error(exc):
+                active_key = getattr(self._llm, "_api_key", None)
+                if active_key:
+                    _GEMINI_KEY_POOL.mark_exhausted(active_key)
+                next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+                if next_key and total_active > 0:
+                    print(f"  [LLM] Rotating to next Gemini API key in pool ({total_active} active)...")
+                    next_llm = get_llm(agent_type=self._agent_type, provider="google", is_fallback=self.is_fallback)
+                    return next_llm.invoke(*args, **kwargs)
+            if self.is_fallback:
+                raise
+            fallback_llm = _provider_fallback(self)
             if fallback_llm is None:
                 raise
-            print("  [LLM] Provider call failed; falling back to Ollama.")
+            print(f"  [LLM] Provider {self.provider} call failed ({exc}); falling back to {fallback_llm.provider}...")
             return fallback_llm.invoke(*args, **kwargs)
         _record_token_usage(self._agent_type, response)
         return response
@@ -143,37 +228,123 @@ class _TrackedLLM:
             self._agent_type,
             self.provider,
             getattr(self._llm, "model", None) or getattr(self._llm, "model_name", "llm"),
-            int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "num_predict", 0) or 0),
+            int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "max_output_tokens", 0) or getattr(self._llm, "num_predict", 0) or 0),
         )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._llm, name)
 
 
+def _resolve_agent_provider(agent_type: str) -> str:
+    """Determine preferred provider for an agent type based on environment config and user preference."""
+    # Check explicit per-agent environment override:
+    # e.g. PROVIDER_CODE=deepseek, PROVIDER_DOCUMENTATION=google, PROVIDER_REVIEW=google
+    env_override = os.environ.get(f"PROVIDER_{agent_type.upper()}")
+    if env_override:
+        return env_override.lower().strip()
+
+    # If the user explicitly configured deepseek as the global provider, use deepseek across all agents!
+    if DEFAULT_PROVIDER == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
+        return "deepseek"
+
+    # Code agent defaults to DeepSeek when key exists
+    if agent_type == "code":
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            return "deepseek"
+        if os.environ.get("GROQ_API_KEY"):
+            return "groq"
+
+    # Simple tasks: Documentation, Review prefer Google Gemini if keys available
+    if agent_type in ("documentation", "review"):
+        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+        if active_key:
+            return "google"
+        if os.environ.get("GROQ_API_KEY"):
+            return "groq"
+
+    # Requirement agent: prefer Google Gemini if active key available, else Groq
+    if agent_type == "requirement":
+        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+        if active_key:
+            return "google"
+        if os.environ.get("GROQ_API_KEY"):
+            return "groq"
+
+    # Design and Test: prefer Groq (or DeepSeek) for fast execution
+    if agent_type in ("design", "test"):
+        if os.environ.get("GROQ_API_KEY"):
+            return "groq"
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            return "deepseek"
+
+    return DEFAULT_PROVIDER
+
+
 def get_llm(
     agent_type: str = "requirement",
     max_tokens: int = 4000,
-    provider: Literal["ollama", "groq"] = "ollama",
+    provider: Literal["google", "ollama", "groq", "deepseek"] | None = None,
+    is_fallback: bool = False,
 ):
     """
-    Build a tracked LLM for Ollama agents, with Groq available for targeted retries.
+    Build a tracked LLM with per-agent role routing and fallback resilience.
+    - Code Agent defaults to DeepSeek (using DEEPSEEK_CODE_MODEL) when configured.
+    - Simple tasks (review, documentation, requirements) default to Google Gemini with multi-key pool rotation.
+    - Groq provides ultra-fast generation and reliable fallback.
     """
-    if provider == "groq":
-        if agent_type != "code":
-            raise ValueError("The Groq provider is currently supported only for the code agent.")
-        if not os.environ.get("GROQ_API_KEY"):
+    if provider is None:
+        selected_provider = _resolve_agent_provider(agent_type)
+    else:
+        selected_provider = provider.lower().strip()
+
+    if selected_provider == "deepseek":
+        deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not deepseek_key:
+            if os.environ.get("GROQ_API_KEY") and not is_fallback:
+                print("  [LLM] DEEPSEEK_API_KEY not configured; falling back to Groq.")
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
             raise RuntimeError(
-                "GROQ_API_KEY is required for the Groq code retry. Add it to the project .env file."
+                "DEEPSEEK_API_KEY is required in your .env file to use DeepSeek models. "
+                "Get an API key from https://platform.deepseek.com"
             )
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError as exc:
+            print(f"  [LLM] langchain_openai missing ({exc}); falling back to Groq.")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=is_fallback)
+
+        if agent_type == "code":
+            selected_model = _RUNTIME_MODELS.get(agent_type) or DEEPSEEK_CODE_MODEL
+        else:
+            selected_model = _RUNTIME_MODELS.get(agent_type) or DEEPSEEK_MODEL
+
+        usage = _TOKEN_USAGE.setdefault(agent_type, {
+            "model": selected_model, "calls": 0,
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        })
+        usage["model"] = selected_model
+        return _TrackedLLM(ChatOpenAI(
+            model=selected_model,
+            api_key=deepseek_key,
+            base_url=DEEPSEEK_BASE_URL,
+            max_tokens=max_tokens,
+            temperature=0,
+        ), agent_type, provider="deepseek", is_fallback=is_fallback)
+
+    if selected_provider == "groq":
+        groq_key = os.environ.get("GROQ_API_KEY")
+        if not groq_key:
+            print("  [LLM] GROQ_API_KEY not configured; falling back to DeepSeek or Google.")
+            if os.environ.get("DEEPSEEK_API_KEY"):
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=is_fallback)
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=is_fallback)
         try:
             from langchain_groq import ChatGroq
         except ImportError as exc:
-            raise RuntimeError(
-                "The Groq provider package is missing. Install it with "
-                "`pip install -r requirements-groq.txt`."
-            ) from exc
+            print(f"  [LLM] langchain_groq missing ({exc}); falling back to Google Gemini.")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=is_fallback)
 
-        selected_model = GROQ_CODE_MODEL
+        selected_model = _RUNTIME_MODELS.get(agent_type) or (GROQ_CODE_MODEL if agent_type == "code" else GROQ_MODEL)
         usage = _TOKEN_USAGE.setdefault(agent_type, {
             "model": selected_model, "calls": 0,
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
@@ -181,54 +352,96 @@ def get_llm(
         usage["model"] = selected_model
         return _TrackedLLM(ChatGroq(
             model=selected_model,
+            api_key=groq_key,
             max_tokens=max_tokens,
             temperature=0,
-        ), agent_type)
+        ), agent_type, provider="groq", is_fallback=is_fallback)
 
-    if provider != "ollama":
-        raise ValueError(f"Unsupported LLM provider: {provider}")
-
-    if agent_type in OLLAMA_AGENTS:
-        selected_model = _RUNTIME_MODELS.get(agent_type) or OLLAMA_MODEL
+    if selected_provider == "google":
+        key, total_active = _GEMINI_KEY_POOL.get_active_key()
+        if not key:
+            print("  [LLM] No active Google Gemini keys in pool (all exhausted or none configured); falling back to Groq / DeepSeek.")
+            if os.environ.get("GROQ_API_KEY") and not is_fallback:
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
+            if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True)
+            raise RuntimeError(
+                "GEMINI_API_KEY or GOOGLE_API_KEY is required in your .env file to use Google models. "
+                "Get a free Gemini API key from https://aistudio.google.com/app/apikey"
+            )
+        selected_model = _RUNTIME_MODELS.get(agent_type) or GOOGLE_MODEL
         usage = _TOKEN_USAGE.setdefault(agent_type, {
             "model": selected_model, "calls": 0,
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         })
         usage["model"] = selected_model
-        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
-        return _TrackedLLM(ChatOllama(
+        google_llm = ChatGoogleGenerativeAI(
             model=selected_model,
-            base_url=OLLAMA_BASE_URL,
-            num_predict=max_tokens,
-            num_ctx=num_ctx,
-        ), agent_type)
+            google_api_key=key,
+            temperature=0,
+            max_output_tokens=max_tokens,
+            max_retries=1,
+        )
+        setattr(google_llm, "_api_key", key)
+        return _TrackedLLM(google_llm, agent_type, provider="google", is_fallback=is_fallback)
+
+    if selected_provider == "ollama":
+        if agent_type in _ALL_AGENTS:
+            selected_model = _RUNTIME_MODELS.get(agent_type) or OLLAMA_MODEL
+            usage = _TOKEN_USAGE.setdefault(agent_type, {
+                "model": selected_model, "calls": 0,
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            })
+            usage["model"] = selected_model
+            num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+            return _TrackedLLM(ChatOllama(
+                model=selected_model,
+                base_url=OLLAMA_BASE_URL,
+                num_predict=max_tokens,
+                num_ctx=num_ctx,
+            ), agent_type, provider="ollama", is_fallback=is_fallback)
 
     raise ValueError(
-        f"Unknown agent type '{agent_type}'. Expected one of: {sorted(OLLAMA_AGENTS)}"
+        f"Unsupported provider '{selected_provider}' for agent '{agent_type}'. "
+        f"Expected one of: 'deepseek', 'groq', 'google', 'ollama'."
     )
 
 
-def _ollama_fallback(llm: Any, max_tokens: int | None = None) -> Any:
-    """Return Ollama for a failed non-Ollama call, preserving the agent budget."""
-    if getattr(llm, "provider", "ollama") == "ollama":
+def _provider_fallback(llm: Any, max_tokens: int | None = None) -> Any:
+    """Fallback to alternative provider if active provider fails."""
+    # Prevent infinite fallback loops
+    if getattr(llm, "is_fallback", False):
         return None
+
+    current_provider = getattr(llm, "provider", None)
     agent_type = getattr(llm, "_agent_type", "code")
-    return get_llm(
-        agent_type=agent_type,
-        max_tokens=max_tokens or int(
-            getattr(llm._llm, "max_tokens", None)
-            or getattr(llm._llm, "num_predict", 4000)
-            or 4000
-        ),
-        provider="ollama",
-    )
+
+    # Priority 1: Groq for fast and reliable inference
+    if current_provider != "groq" and os.environ.get("GROQ_API_KEY"):
+        print(f"  [LLM fallback] {current_provider} call failed; falling back to Groq...")
+        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True)
+
+    # Priority 2: DeepSeek if configured
+    if current_provider != "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
+        print(f"  [LLM fallback] {current_provider} call failed; falling back to DeepSeek...")
+        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True)
+
+    # Priority 3: Google Gemini if an active key is available
+    if current_provider != "google":
+        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+        if active_key:
+            print(f"  [LLM fallback] {current_provider} call failed; falling back to Google Gemini...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True)
+
+    return None
 
 
 def set_runtime_models(models: dict[str, str]) -> None:
     """Update models used by subsequent agent calls without restarting the server."""
+    default_mod = _default_model_name()
     for agent_type, model in models.items():
-        if agent_type in OLLAMA_AGENTS:
-            _RUNTIME_MODELS[agent_type] = model.strip() if model.strip() else OLLAMA_MODEL
+        if agent_type in _ALL_AGENTS:
+            _RUNTIME_MODELS[agent_type] = model.strip() if model.strip() else default_mod
 
 
 def load_prompt(filename: str) -> str:
@@ -276,7 +489,15 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     """Identify provider or model-pool rate limits before retrying needlessly."""
     status_code = getattr(exc, "status_code", None)
     details = str(exc).lower()
-    return status_code == 429 or "too many requests" in details or "rate-limited" in details
+    return (
+        status_code == 429
+        or "429" in details
+        or "too many requests" in details
+        or "rate-limited" in details
+        or "rate_limit" in details
+        or "resource_exhausted" in details
+        or "quota" in details
+    )
 
 
 def _rate_limit_message(exc: Exception) -> str:
@@ -285,15 +506,55 @@ def _rate_limit_message(exc: Exception) -> str:
     raw = getattr(metadata, "raw", None) if metadata else None
     detail = raw or str(exc)
     return (
-        "OpenRouter rate limit for google/gemma-4-26b-a4b-it:free. "
-        f"{detail}"
+        f"Provider rate limit or quota exceeded: {detail}"
     )
 
 
-def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 3) -> T:
+def _extract_from_failed_generation(exc: Exception, schema: Type[T]) -> T | None:
+    """Salvage valid structured data if provider returned tool_use_failed with failed_generation."""
+    try:
+        body = getattr(exc, "body", None)
+        failed_gen = None
+        if isinstance(body, dict):
+            failed_gen = body.get("error", {}).get("failed_generation")
+        if not failed_gen:
+            response = getattr(exc, "response", None)
+            if response and hasattr(response, "json"):
+                try:
+                    data = response.json()
+                    if isinstance(data, dict):
+                        failed_gen = data.get("error", {}).get("failed_generation")
+                except Exception:
+                    pass
+        if not failed_gen:
+            err_str = str(exc)
+            idx = err_str.find("'failed_generation': '")
+            if idx != -1:
+                start = idx + len("'failed_generation': '")
+                end = err_str.rfind("'")
+                if end > start:
+                    raw_str = err_str[start:end]
+                    try:
+                        failed_gen = bytes(raw_str, "utf-8").decode("unicode_escape")
+                    except Exception:
+                        failed_gen = raw_str
+        if failed_gen:
+            parsed = _extract_json_from_text(failed_gen)
+            if isinstance(parsed, dict) and "arguments" in parsed and isinstance(parsed["arguments"], dict):
+                parsed = parsed["arguments"]
+            validated = schema.model_validate(parsed)
+            print(f"  [invoke_structured] Successfully salvaged complete structured data from provider failed_generation!")
+            return validated
+    except Exception as e:
+        print(f"  [invoke_structured] Salvage from failed_generation skipped: {e}")
+    return None
+
+
+def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2) -> T:
     """
     Try native structured output first, then ask the same model for plain JSON.
     The JSON path supports models that do not implement tool calling.
+    Handles automatic rotation across Gemini key pool and graceful provider fallback.
     """
     last_err = None
     schema_hint = _json_schema_hint(schema)
@@ -321,12 +582,44 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 3
                 raise
             except Exception as exc:
                 if _is_rate_limit_error(exc):
+                    if getattr(llm, "provider", None) == "google":
+                        active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
+                        if active_key:
+                            _GEMINI_KEY_POOL.mark_exhausted(active_key)
+                        next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+                        if next_key and total_active > 0:
+                            print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
+                            next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
+                            return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
+                    fallback_llm = _provider_fallback(llm)
+                    if fallback_llm is not None:
+                        print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
+                        return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
                     raise RuntimeError(_rate_limit_message(exc)) from exc
+                salvaged = _extract_from_failed_generation(exc, schema)
+                if salvaged is not None:
+                    return salvaged
                 last_err = exc
                 print(f"  [invoke_structured] native attempt {attempt + 1}/{max_retries} failed: {exc}")
     except Exception as exc:
         if _is_rate_limit_error(exc):
+            if getattr(llm, "provider", None) == "google":
+                active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
+                if active_key:
+                    _GEMINI_KEY_POOL.mark_exhausted(active_key)
+                next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+                if next_key and total_active > 0:
+                    print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
+                    next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
+                    return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
+            fallback_llm = _provider_fallback(llm)
+            if fallback_llm is not None:
+                print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
+                return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
             raise RuntimeError(_rate_limit_message(exc)) from exc
+        salvaged = _extract_from_failed_generation(exc, schema)
+        if salvaged is not None:
+            return salvaged
         last_err = exc
         print(f"  [invoke_structured] native strategy unavailable: {exc}")
 
@@ -338,13 +631,26 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 3
             return schema.model_validate(_extract_json_from_text(text))
         except Exception as exc:
             if _is_rate_limit_error(exc):
+                if getattr(llm, "provider", None) == "google":
+                    active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
+                    if active_key:
+                        _GEMINI_KEY_POOL.mark_exhausted(active_key)
+                    next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+                    if next_key and total_active > 0:
+                        print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
+                        next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
+                        return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
+                fallback_llm = _provider_fallback(llm)
+                if fallback_llm is not None:
+                    print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
+                    return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
                 raise RuntimeError(_rate_limit_message(exc)) from exc
             last_err = exc
             print(f"  [invoke_structured] JSON fallback attempt {attempt + 1}/{max_retries} failed: {exc}")
 
-    fallback_llm = _ollama_fallback(llm)
+    fallback_llm = _provider_fallback(llm)
     if fallback_llm is not None:
-        print("  [invoke_structured] Provider failed; falling back to Ollama.")
+        print("  [invoke_structured] Provider failed; falling back to alternative provider.")
         return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
 
     raise RuntimeError(

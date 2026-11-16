@@ -65,12 +65,12 @@ const STAGE_DEFS = [
 
 /* ── Model configuration (read from backend imports.py) ── */
 const MODEL_CONFIG = {
-  requirement:    { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Requirement analysis & scope extraction' },
-  design:         { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Architecture & component design' },
-  code:           { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Code generation & repository scaffold' },
-  test:           { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Test generation & execution' },
-  review:         { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Quality review & approval gate' },
-  documentation:  { provider: 'Ollama', model: 'qwen2.5-coder:7b', role: 'Documentation & README generation' },
+  requirement:    { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Requirement analysis & scope extraction' },
+  design:         { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Architecture & component design' },
+  code:           { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Code generation & repository scaffold' },
+  test:           { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Test generation & execution' },
+  review:         { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Quality review & approval gate' },
+  documentation:  { provider: 'Groq',   model: 'openai/gpt-oss-120b', role: 'Documentation & README generation' },
 };
 
 /* ═════════════════════════════════════════════════
@@ -401,12 +401,19 @@ function handlePollResult(data) {
     return;
   }
 
-  // Pipeline is still running: keep polling.
-  if (data.is_running) {
-    const stage = normaliseStage(data.stage || 'requirement');
-    updateLiveStage(stage);
-    setNavPipelineStatus('running');
-    setSbStatus('running');
+  // Handle clarification first (stops polling and opens modal)
+  if (data.status === 'clarification') {
+    clearInterval(State.pollTimer);
+    addActivity(
+      'Requirement Agent',
+      'Clarification needed',
+      'Waiting for user input'
+    );
+    setNavPipelineStatus('paused');
+    setSbStatus('paused');
+    showClarifyOverlay(
+      data.result?.clarification_questions || []
+    );
     return;
   }
 
@@ -427,18 +434,12 @@ function handlePollResult(data) {
     return;
   }
 
-  if (data.status === 'clarification') {
-    clearInterval(State.pollTimer);
-    addActivity(
-      'Requirement Agent',
-      'Clarification needed',
-      'Waiting for user input'
-    );
-    setNavPipelineStatus('paused');
-    setSbStatus('paused');
-    showClarifyOverlay(
-      data.result?.clarification_questions || []
-    );
+  // Pipeline is still running: keep polling.
+  if (data.is_running) {
+    const stage = normaliseStage(data.stage || 'requirement');
+    updateLiveStage(stage);
+    setNavPipelineStatus('running');
+    setSbStatus('running');
     return;
   }
 
@@ -1806,7 +1807,7 @@ function renderModelsView() {
                 id="mv-input-${def.id}"
                 type="text"
                 value="${escHtml(cfg.model || '')}"
-                placeholder="e.g. google/gemma-4-26b-a4b-it:free"
+                placeholder="e.g. gemini-3.8-flash"
               />
               <div class="mcm-ui-note">Edit then click Save All Models</div>
             </div>
@@ -2042,9 +2043,9 @@ function openModelConfig() {
           <input class="mcm-model-select" type="text"
             id="mcm-input-${def.id}"
             value="${escHtml(cfg.model || '')}"
-            placeholder="e.g. google/gemma-4-26b-a4b-it:free"
+            placeholder="e.g. gemini-3.8-flash"
             title="Enter the model ID to use for the ${escHtml(def.label)} agent" />
-          <div class="mcm-ui-note">Leave empty to use the Ollama default. Changes apply to the next agent call.</div>
+          <div class="mcm-ui-note">Leave empty to use the Google Gemini default (gemini-3.8-flash). Changes apply to the next agent call.</div>
         </div>
       </div>
     `;

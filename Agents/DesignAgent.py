@@ -1,30 +1,30 @@
 import json
 import re
 import imports
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from State_definition import AgentState
 
 class DesignComponent(BaseModel):
-    id: str = Field(description="Unique ID in the form COMP-01, COMP-02, ...")
-    name: str
-    responsibility: str
+    id: str = Field(default="COMP-01", description="Unique ID in the form COMP-01, COMP-02, ...")
+    name: str = Field(default="Component")
+    responsibility: str = Field(default="")
     requirement_ids: list[str] = Field(default_factory=list)
 
 
 class DataEntity(BaseModel):
-    id: str
-    name: str
-    purpose: str
+    id: str = Field(default="ENT-01")
+    name: str = Field(default="Entity")
+    purpose: str = Field(default="")
     attributes: list[str] = Field(default_factory=list)
     relationships: list[str] = Field(default_factory=list)
     requirement_ids: list[str] = Field(default_factory=list)
 
 
 class APIEndpoint(BaseModel):
-    id: str
-    method: str
-    path: str
-    description: str
+    id: str = Field(default="EP-01")
+    method: str = Field(default="GET")
+    path: str = Field(default="/")
+    description: str = Field(default="")
     request_fields: list[str] = Field(
         default_factory=list,
         description="Input fields with type and validation rule, e.g. 'title: string, 1-100 chars'.")
@@ -37,27 +37,39 @@ class APIEndpoint(BaseModel):
         description="Failures as 'condition -> status', e.g. 'unknown id -> 404'.")
     requirement_ids: list[str] = Field(default_factory=list)
 
+    @field_validator("success_status", mode="before")
+    @classmethod
+    def parse_success_status(cls, v):
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            match = re.search(r"\d+", v)
+            if match:
+                return int(match.group(0))
+        return 200
+
 
 class DesignDecision(BaseModel):
-    id: str
-    decision: str
-    reason: str
+    id: str = Field(default="DD-01")
+    decision: str = Field(default="")
+    reason: str = Field(default="")
     requirement_ids: list[str] = Field(default_factory=list)
 
 
 class EdgeCase(BaseModel):
-    id: str
-    description: str
+    id: str = Field(default="EC-01")
+    description: str = Field(default="")
     requirement_ids: list[str] = Field(default_factory=list)
     component_ids: list[str] = Field(default_factory=list)
 
 
 class TechnologyChoice(BaseModel):
     category: str = Field(
-        description="Core architecture category: 'language' (Python, Go, Java, TypeScript, Rust), 'backend' (FastAPI, Gin, Spring Boot, Flask, Express), 'frontend' (HTML/CSS/JS, React, Vue, Svelte), 'database' (PostgreSQL, MongoDB, SQLite, MySQL, Redis), 'testing' (pytest, go test, JUnit, Jest)"
+        default="backend",
+        description="Core architecture category: 'language', 'backend', 'frontend', 'database', 'testing'"
     )
-    technology: str = Field(description="Selected technology name, e.g. 'Go', 'Python', 'FastAPI', 'PostgreSQL', 'MongoDB', 'React'")
-    reason: str = Field(description="Reason for selection")
+    technology: str = Field(default="", description="Selected technology name")
+    reason: str = Field(default="", description="Reason for selection")
 
 
 class DesignDocument(BaseModel):
@@ -381,7 +393,7 @@ def Design_Agent(state: AgentState) -> dict:
 
     response = None
     try:
-        llm = imports.get_llm(agent_type="design", max_tokens=6000)
+        llm = imports.get_llm(agent_type="design", max_tokens=4000)
         messages = [imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))]
         try:
             messages.append(imports.SystemMessage(content=imports.load_prompt("skills/design_skill.txt")))
@@ -389,7 +401,7 @@ def Design_Agent(state: AgentState) -> dict:
             print("  [Design Agent] skills/design_skill.txt not found - continuing with the prompt only.")
         messages.append(imports.HumanMessage(
             content=f"Original Product Idea:\n{idea}\n\nHere are the requirements produced by the Requirement Agent:\n\n"
-                    + json.dumps(requirements, indent=1, ensure_ascii=False, default=str)
+                    + json.dumps(requirements, separators=(',', ': '), ensure_ascii=False, default=str)
         ))
         result = imports.invoke_structured(llm, DesignDocument, messages)
         if result and isinstance(result, DesignDocument):
