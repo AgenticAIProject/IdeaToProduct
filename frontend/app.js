@@ -29,6 +29,7 @@ const State = {
   projectName: 'Untitled',
   idea: '',
   githubRepo: '',
+  githubToken: '',
   currentView: 'overview',
   lastLoggedStage: null,
   pollTimer: null,
@@ -44,6 +45,13 @@ const State = {
 
 /* ── DOM refs ────────────────────────────── */
 const $ = id => document.getElementById(id);
+
+/* ── Normalise stage id: backend uses plural "requirements", STAGE_DEFS uses "requirement" ── */
+function normaliseStage(stage) {
+  if (!stage) return stage;
+  // "requirements" → "requirement", others unchanged
+  return stage === 'requirements' ? 'requirement' : stage;
+}
 
 /* ── Stage definitions (matches graph.py nodes) ── */
 const STAGE_DEFS = [
@@ -183,7 +191,7 @@ window.launchPipeline = async function () {
     State.isLive = true;
     State.isOverviewOnly = false;
     State.status = 'running';
-    State.stage = 'requirements';
+    State.stage = 'requirement';
     State.error = null;
     setStopControl(true);
     State.pipelineData = null;
@@ -282,7 +290,7 @@ window.openPipelineOverview = async function () {
   State.isLive = Boolean(activeSession);
   State.isOverviewOnly = !activeSession;
   State.status = activeSession?.status || 'idle';
-  State.stage = activeSession?.stage || null;
+  State.stage = normaliseStage(activeSession?.stage || null);
   State.error = activeSession?.error || null;
   State.pipelineData = activeSession?.result || null;
   State.activityLog = [];
@@ -352,14 +360,14 @@ async function pollStatus() {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     handlePollResult(data);
-      refreshLiveWorkspace(data);
-    } catch (e) { /* transient — keep polling */ }
+    refreshLiveWorkspace(data);
+  } catch (e) { /* transient — keep polling */ }
 }
 
 
 function logStageChange(stage) {
   if (!stage) return;
-  const id = stage === 'requirements' ? 'requirement' : stage;
+  const id = normaliseStage(stage);
   if (id === State.lastLoggedStage) return;
   const def = STAGE_DEFS.find(s => s.id === id);
   if (!def) return;
@@ -369,7 +377,7 @@ function logStageChange(stage) {
 
 function handlePollResult(data) {
   State.status = data.status;
-  State.stage = data.stage || State.stage;
+  State.stage = normaliseStage(data.stage || State.stage);
   State.error = data.error || null;
   if (data.is_running) logStageChange(data.stage);
 
@@ -387,7 +395,7 @@ function handlePollResult(data) {
   setStopControl(data.is_running, data.status === 'stopping');
 
   if (data.status === 'stopping') {
-    updateLiveStage(data.stage || 'requirements');
+    updateLiveStage(normaliseStage(data.stage || 'requirement'));
     setNavPipelineStatus('stopping');
     setSbStatus('stopping');
     return;
@@ -395,7 +403,7 @@ function handlePollResult(data) {
 
   // Pipeline is still running: keep polling.
   if (data.is_running) {
-    const stage = data.stage || 'requirements';
+    const stage = normaliseStage(data.stage || 'requirement');
     updateLiveStage(stage);
     setNavPipelineStatus('running');
     setSbStatus('running');
@@ -448,7 +456,8 @@ function handlePollResult(data) {
 
 
 function updateLiveStage(stage) {
-  const idx = STAGE_DEFS.findIndex(s => s.id === stage || s.id === stage.replace(/s$/, ''));
+  const normStage = normaliseStage(stage);
+  const idx = STAGE_DEFS.findIndex(s => s.id === normStage);
   if (idx < 0) return;
 
   STAGE_DEFS.forEach((def, i) => {
@@ -520,8 +529,12 @@ function populateLiveViews(result) {
     renderRequirementsView(result.requirements);
   if (result.design && Object.keys(result.design).length)
     renderDesignView(result.design);
-  if (result.code && Object.keys(result.code).length)
+  if (result.code && Object.keys(result.code).length) {
     renderCodeView(result.code);
+    // Code data is now available — hide the live workspace panel so both
+    // sections are never visible at the same time.
+    $('liveWorkspacePanel')?.classList.add('hidden');
+  }
   if (result.test_results && Object.keys(result.test_results).length)
     renderTestsView(result.test_results);
   if (result.review && Object.keys(result.review).length)
@@ -769,16 +782,15 @@ function buildPipelineStages(pipelineArr) {
 
 function updateSidebarStages(lastStage, result) {
   // Map stage names — backend uses "requirements" but stage id is "requirement"
-  let mappedStage = lastStage;
-  if (lastStage === 'requirements') mappedStage = 'requirement';
-
+  const mappedStage = normaliseStage(lastStage);
   const idx = STAGE_DEFS.findIndex(s => s.id === mappedStage);
 
   STAGE_DEFS.forEach((def, i) => {
     const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
     if (!el) return;
     el.classList.remove('running');
-    if (i <= idx) el.classList.add('done');
+    if (i < idx) el.classList.add('done');
+    else if (i === idx) el.classList.add('done'); // last completed = done on pipeline finish
   });
 }
 
@@ -788,8 +800,8 @@ function updateSidebarStages(lastStage, result) {
 function addActivity(agent, event, detail) {
   const now = new Date();
   const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-  State.activityLog.unshift({ time, agent, event, detail });
-  buildActivityFeed(State.activityLog.slice().reverse());
+  State.activityLog.push({ time, agent, event, detail }); // push newest to end
+  buildActivityFeed(State.activityLog);
 }
 
 function buildActivityFeed(events) {
@@ -837,7 +849,13 @@ window.switchView = function (viewId) {
   const liveWorkspace = $('liveWorkspacePanel');
 
   if (liveWorkspace) {
-    liveWorkspace.classList.toggle('hidden', viewId !== 'code');
+    // Show the live workspace panel on the code view ONLY while the pipeline
+    // is actively running the code stage (no finished code data yet).
+    // Once the code agent is done (State.pipelineData?.code has content),
+    // hide the live panel and let the rendered view-code take over.
+    const hasCodeData = !!(State.pipelineData?.code && Object.keys(State.pipelineData.code).length);
+    const showLive = viewId === 'code' && State.isLive && !hasCodeData;
+    liveWorkspace.classList.toggle('hidden', !showLive);
   }
 
   renderViewIfNeeded(viewId);
@@ -1025,6 +1043,9 @@ function renderEmptyView(el, title, message) {
       <div class="empty-state-sub">${escHtml(message)}</div>
     </div>
   `;
+  // Do NOT mark as rendered — re-check on next view switch so real data
+  // replaces this placeholder once the pipeline produces output.
+  delete el.dataset.rendered;
 }
 
 /* ═════════════════════════════════════════════════
@@ -1050,7 +1071,7 @@ function renderOverview(data) {
   // Determine pipeline stages display
   let pipeline;
   if (State.isLive && State.pipelineData) {
-    const currentStage = (State.stage || State.pipelineData.current_stage || '').replace(/s$/, '');
+    const currentStage = normaliseStage((State.stage || State.pipelineData.current_stage || ''));
     const stageResults = {
       requirement: State.pipelineData.requirements,
       design: State.pipelineData.design,
@@ -1199,7 +1220,7 @@ async function renderProjectsView() {
   } catch (err) {
     const list = $('projectList');
     if (list) list.innerHTML = `<div class="err-card"><div class="err-title">Could not load projects</div><div class="err-msg">${escHtml(err.message)}</div><button class="btn-ghost" type="button" onclick="loadProjects()">Try again</button></div>`;
-    if (el) el.dataset.rendered = '';
+    if (el) delete el.dataset.rendered;
   }
 }
 
@@ -1813,7 +1834,7 @@ window.saveModelsView = async function () {
   if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
 
   try {
-    const res = await fetch('/api/models/runtime', {
+    const res = await fetch(`${API}/api/models/runtime`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ models: updated })
@@ -1879,7 +1900,7 @@ function renderGitHubView() {
               Personal Access Token
             </label>
             <div class="gh-input-wrap">
-              <input id="githubTokenInput" class="gh-input" type="password" placeholder="ghp_xxxxxxxxxxxx" spellcheck="false" />
+              <input id="githubTokenInput" class="gh-input" type="password" value="${escHtml(State.githubToken)}" placeholder="ghp_xxxxxxxxxxxx" spellcheck="false" />
             </div>
             <div class="gh-hint">GitHub requires a token with repository Contents write access for publishing. Never stored beyond this request.</div>
           </div>
@@ -1957,6 +1978,7 @@ function renderGitHubView() {
       }
 
       const token = $('githubTokenInput')?.value.trim() || '';
+      State.githubToken = token; // persist across re-renders
       const commitMessage = $('githubCommitMsg')?.value.trim() || '';
       fetch(`${API}/api/release`, {
         method: 'POST',
@@ -2046,7 +2068,7 @@ window.saveModelConfig = async function () {
   if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
 
   try {
-    const res = await fetch('/api/models/runtime', {
+    const res = await fetch(`${API}/api/models/runtime`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ models: updated })
@@ -2238,7 +2260,12 @@ function renderLiveWorkspaceFiles() {
 // Close overlays on Escape
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    $('clarifyOverlay')?.classList.add('hidden');
+    // For the model-config overlay a simple hide is fine.
+    // For the clarification overlay, silently hiding it hangs the pipeline
+    // because polling has stopped. Resume with defaults instead.
+    if ($('clarifyOverlay') && !$('clarifyOverlay').classList.contains('hidden')) {
+      skipClarification();
+    }
     $('modelConfigOverlay')?.classList.add('hidden');
   }
 });
@@ -2321,7 +2348,7 @@ function escHtml(s) {
 function shakeEl(el) {
   if (!el) return;
   el.style.animation = 'none';
-  el.offsetHeight; // trigger reflow
+  void el.offsetHeight; // trigger reflow (intentional, suppresses lint warning)
   el.style.animation = 'shake 0.35s ease';
   setTimeout(() => { el.style.animation = ''; }, 400);
 }

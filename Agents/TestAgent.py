@@ -257,16 +257,41 @@ CRITICAL TESTING INSTRUCTIONS:
 3. Do NOT use ESM syntax ('import ...', 'export ...'). Always use CommonJS require.
 4. Do NOT require third-party packages (e.g. jest, mocha, chai, jsdom, react-scripts) because tests run in a clean Node environment without external node_modules.
 5. Tests must exercise the REAL code:
-   - To verify HTML structure: read `index.html` with fs. Check stylesheets via `<link rel="stylesheet"` (NEVER assert `<script src="style.css">`). Check script tags via `<script src="logic.js">`.
-   - To verify logic: require('./logic.js') and ONLY test functions and properties that are explicitly listed in `module.exports`. NEVER guess or call unexported internal helper functions (such as `updateDisplay`).
-   - State isolation: Reset calculator/app state before each test case. Remember that pressing number buttons sequentially appends digits (e.g. '1' then '2' is '12').
-   Skeleton:
+   - To verify HTML structure: read `index.html` with fs.
+     * Check stylesheets: assert(html.includes('<link rel="stylesheet"'))
+     * Check scripts: assert(html.includes('<script src="logic.js">'))
+     * Check elements by id using a REGEX, NOT exact tag string:
+       assert(/id=["']goal-input["']/.test(html))   ← CORRECT
+       assert(html.includes('<input id="goal-input">'))  ← WRONG (attribute order not guaranteed)
+   - To verify logic: require('./logic.js') and ONLY test functions and properties explicitly in module.exports.
+     NEVER call unexported internal helpers.
+6. STATE ISOLATION IS MANDATORY — this is the #1 source of test failures:
+   - Call `logic._resetState()` at the VERY START of EVERY test() block before anything else.
+   - If _resetState is not exported, manually reset: `logic.goals = []; logic.streaks = {};`
+   - Without reset, goals added in TC-02 will still be in logic.goals when TC-07 runs.
+   Correct skeleton:
    const test = require('node:test');
    const assert = require('node:assert');
    const fs = require('node:fs');
    const logic = require('./logic.js');
-6. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
-7. NEVER generate Python code for a JavaScript frontend project!
+
+   test('TC-01: ...', () => {
+     logic._resetState();          // ← ALWAYS FIRST
+     // ... test body
+   });
+7. ASSERTION RULES — these mistakes cause permanent test failures:
+   a. NEVER use `===` to compare objects or arrays:
+      assert(logic.streaks === {})         ← ALWAYS FALSE (reference identity)
+      assert.deepStrictEqual(logic.streaks, {})  ← CORRECT
+   b. NEVER call .includes() on a function:
+      assert(logic.displayErrorMessage.includes('...'))  ← TypeError, function has no .includes
+      Instead: assert.strictEqual(logic.setGoal(''), false)  ← check return value
+   c. NEVER assert on internal error message text — assert the OBSERVABLE EFFECT:
+      assert.strictEqual(logic.goals.length, 0)   ← correct
+      assert.strictEqual(result, false)            ← correct
+   d. Use assert.strictEqual for primitives, assert.deepStrictEqual for objects/arrays.
+8. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
+9. NEVER generate Python code for a JavaScript frontend project!
 """
     elif is_go:
         stack_guidelines = """
