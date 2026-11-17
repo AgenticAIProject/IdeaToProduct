@@ -171,6 +171,19 @@ def Review_Agent(state: imports.AgentState) -> dict:
     approval_status = "approved" if response.approved else "rejected"
     print(f"  [Review Agent] Quality Gate Verdict: {approval_status.upper()} (Score: {response.overall_score}/10)")
 
+    # Record Quality Gate Governance Sign-Off in SQLite
+    try:
+        import db_logger
+        db_logger.log_governance_signoff(
+            session_id=state.get("project_id", "project"),
+            stage="review",
+            verdict=approval_status,
+            score=float(response.overall_score),
+            details={"approved": response.approved, "score": response.overall_score, "defects": len(response.defects)}
+        )
+    except Exception as log_err:
+        print(f"  [Review Agent] SQLite governance log note: {log_err}")
+
     return {
         "review": output_review,
         "review_version": state.get("review_version", 0) + 1,

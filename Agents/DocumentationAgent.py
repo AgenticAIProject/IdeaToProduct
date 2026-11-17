@@ -197,6 +197,17 @@ Treat the supplied artifacts as authoritative.
         changelog_path.write_text(response.changelog, encoding="utf-8")
         written_doc_files.append("CHANGELOG.md")
 
+    # Persist stage deliverables (market check, review notes)
+    market_analysis = state.get("market_analysis") or {}
+    if market_analysis:
+        (project_dir / "market_check.json").write_text(json.dumps(market_analysis, indent=2), encoding="utf-8")
+        written_doc_files.append("market_check.json")
+
+    review_data = state.get("review") or {}
+    if review_data:
+        (project_dir / "review_notes.json").write_text(json.dumps(review_data, indent=2), encoding="utf-8")
+        written_doc_files.append("review_notes.json")
+
     documentation_payload["files_written"] = written_doc_files
     documentation_payload["project_dir"] = str(project_dir)
 

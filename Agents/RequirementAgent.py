@@ -1,7 +1,7 @@
 import re
 from pydantic import BaseModel, Field
 import imports
-from tools import fetch_github_grounding
+from tools import fetch_github_grounding, market_check
 
 
 class UserStory(BaseModel):
@@ -140,13 +140,28 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
         }
 
     # ---------------------------------------------------------
-    # 6. Developer Issue Grounding (Phase 3)
+    # 6. Empirical Grounding (Kaggle Startup Dataset & GH Archive)
     # ---------------------------------------------------------
+
+    print("  [Grounding] Querying Kaggle Startup Success Prediction benchmark...")
+    market_data = market_check.invoke({"idea": state["idea"]})
 
     print("  [Grounding] Querying GH Archive for real developer issue patterns...")
     grounding_result = fetch_github_grounding.invoke({"idea": state["idea"]})
     github_data = grounding_result["github_data"]
     issues_text  = grounding_result["issues_text"]
+
+    market_prompt = imports.SystemMessage(content=f"""
+Empirical Market Grounding (Kaggle Startup Success Dataset):
+- Sector: {market_data.get('category')}
+- Historical V1 Success Rate: {market_data.get('success_rate', 0.40) * 100:.0f}%
+- Market Incumbents: {', '.join(market_data.get('similar_products', []))}
+- Critical V1 Success Factors: {', '.join(market_data.get('critical_factors', []))}
+- Top Failure Risks: {', '.join(market_data.get('risks', []))}
+- Market Verdict: {market_data.get('verdict')}
+
+INSTRUCTION: Formulate functional requirements that address these critical V1 factors and avoid the failure modes above.
+""")
 
     grounding_prompt = imports.SystemMessage(content=f"""
 Empirical Developer Issues & Edge Cases (GH Archive):
@@ -168,6 +183,7 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     response = imports.invoke_structured(llm, RequirementsList, [
         requirement_prompt, 
         requirement_skill, 
+        market_prompt,
         grounding_prompt, 
         imports.HumanMessage(content=user_input)
     ])
@@ -205,6 +221,7 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     return {
         "requirements":          output_requirements,
         "requirements_version":  state["requirements_version"] + 1,
+        "market_analysis":       market_data,
         "github_evidence":       github_data.get("issues", []),
         "clarification_questions": [],
         "current_stage":         "requirements",

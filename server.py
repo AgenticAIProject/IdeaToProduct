@@ -18,9 +18,10 @@ from Agents.State_definition import AgentState
 from Agents.graph import graph
 from Agents.ReleaseAgent import Release_Agent
 import imports as agent_imports
+import db_logger
 
-# In-memory sessions store
-sessions = {}
+# In-memory sessions store, seeded from persistent SQLite database
+sessions = db_logger.load_all_sessions()
 sessions_lock = threading.Lock()
 
 
@@ -171,6 +172,7 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 "requirements": {},
                 "requirements_version": 0,
                 "github_evidence": [],
+                "market_analysis": {},
                 "design": {},
                 "design_version": 0,
                 "code": {},
@@ -242,6 +244,18 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                         session["stage"] = next_stage
                     else:
                         session["stage"] = stage
+                    try:
+                        db_logger.save_session(session_id, session)
+                        db_logger.log_stage_execution(
+                            session_id=session_id,
+                            stage=stage,
+                            version=int(node_update.get(f"{stage}_version", 1) or 1),
+                            status=workflow_status,
+                            summary=f"Node {node_name} completed with status {workflow_status}",
+                            token_usage=session.get("result", {}).get("token_usage", {}).get(stage)
+                        )
+                    except Exception as db_err:
+                        print(f"  [Server SQLite Log] Warning: {db_err}")
 
         if not result:
             raise RuntimeError("Pipeline produced no agent updates.")
@@ -272,6 +286,10 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
                 session["stage"] = stage
                 session["is_running"] = False
                 session["result"] = result
+            try:
+                db_logger.save_session(session_id, session)
+            except Exception:
+                pass
 
     except Exception as exc:
         with sessions_lock:
@@ -282,6 +300,10 @@ def run_pipeline_thread(session_id: str, thread_id: str, resume_input=None):
             else:
                 session["status"] = "error"
                 session["error"] = str(exc)
+            try:
+                db_logger.save_session(session_id, session)
+            except Exception:
+                pass
 
 
 class PipelineServerHandler(SimpleHTTPRequestHandler):
@@ -549,6 +571,10 @@ class PipelineServerHandler(SimpleHTTPRequestHandler):
                     "result": None,
                     "cancel_requested": False,
                 }
+                try:
+                    db_logger.save_session(session_id, sessions[session_id])
+                except Exception:
+                    pass
 
             worker = threading.Thread(
                 target=run_pipeline_thread,

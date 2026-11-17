@@ -205,84 +205,26 @@ def market_check(idea: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# github_issues_check (Grounded with GH Archive / GitHub Public Issue Text)
+# github_issues_check (Model Context Protocol - MCP Connector for GitHub Issues)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @tool
 def github_issues_check(keywords: list[str]) -> dict:
     """
-    Searches GitHub issues / GH Archive data for real developer bug reports
-    and edge cases matching the given feature keywords.
+    Model Context Protocol (MCP) connector to search GitHub issues / GH Archive data
+    for real developer bug reports and edge cases matching feature keywords.
 
     Returns a dict with:
         issues: list of issue dicts containing repo, title, body snippet, and labels
-        source: 'live_github_api' | 'gh_archive_samples'
+        source: MCP data source identifier
     """
-    import urllib.request
-    import urllib.parse
-
-    query = " ".join(keywords[:3]).strip()
-    issues = []
-    source = "gh_archive_samples"
-
-    # 1. Check curated local GH Archive dataset first (instant 0.001s, no network delay)
-    archive_path = DATA_DIR / "github_archive_samples.json"
-    if not archive_path.exists():
-        archive_path = Path(__file__).resolve().parent / "github_archive_samples.json"
-
-    if archive_path.exists():
-        try:
-            archive = json.loads(archive_path.read_text(encoding="utf-8"))
-            query_words = set(query.lower().split() + [kw.lower() for kw in keywords])
-            scored_issues = []
-            for entry in archive:
-                entry_kws = set(entry.get("keywords", []))
-                score = len(query_words.intersection(entry_kws))
-                if score > 0:
-                    scored_issues.append((score, entry))
-            if scored_issues:
-                scored_issues.sort(key=lambda x: x[0], reverse=True)
-                issues = [
-                    {
-                        "repo": item["repo"],
-                        "title": item["title"],
-                        "body": item["body"][:250],
-                        "labels": item["labels"]
-                    }
-                    for _, item in scored_issues[:3]
-                ]
-                source = "gh_archive_samples"
-        except Exception:
-            pass
-
-    # 2. If no local matches and query exists, attempt quick live GitHub search API
-    if not issues and query:
-        try:
-            encoded_q = urllib.parse.quote(f"{query} is:issue state:closed")
-            url = f"https://api.github.com/search/issues?q={encoded_q}&sort=reactions&per_page=3"
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "IdeaToProduct-Agent/1.0", "Accept": "application/vnd.github.v3+json"}
-            )
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for item in data.get("items", [])[:3]:
-                    issues.append({
-                        "repo": item.get("repository_url", "").split("/")[-1] or "github",
-                        "title": item.get("title", ""),
-                        "body": (item.get("body") or "")[:250],
-                        "labels": [lbl.get("name", "") for lbl in item.get("labels", [])][:3]
-                    })
-                if issues:
-                    source = "live_github_api"
-        except Exception:
-            pass
-
+    from mcp_github_connector import mcp_github
+    res = mcp_github.call_tool("get_github_issues", {"keywords": keywords, "limit": 3})
     return {
-        "query": query,
-        "source": source,
-        "issue_count": len(issues),
-        "issues": issues
+        "query": " ".join(keywords[:3]).strip(),
+        "source": res.get("source", "gh_archive_samples (MCP)"),
+        "issue_count": res.get("issue_count", 0),
+        "issues": res.get("issues", [])
     }
 
 

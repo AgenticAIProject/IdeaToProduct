@@ -22,7 +22,10 @@ env/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs and databases
+logs/*.db
+*.db
+logs/
 
 
 info.md

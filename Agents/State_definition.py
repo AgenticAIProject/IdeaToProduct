@@ -16,6 +16,7 @@ class AgentState(TypedDict):
     requirements: dict
     requirements_version: int
     github_evidence: list
+    market_analysis: dict
 
     # Design
     design: dict
