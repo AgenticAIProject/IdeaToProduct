@@ -136,7 +136,13 @@ def _usage_from_response(response: Any) -> dict[str, int]:
     """Read token counters from provider-specific LangChain response metadata."""
     metadata = getattr(response, "usage_metadata", None) or {}
     response_metadata = getattr(response, "response_metadata", None) or {}
-    usage = metadata or response_metadata.get("usage", {}) or response_metadata
+    usage = (
+        metadata
+        or response_metadata.get("token_usage", {})
+        or response_metadata.get("usage", {})
+        or getattr(response, "usage", None)
+        or response_metadata
+    )
 
     def number(*keys: str) -> int:
         for key in keys:

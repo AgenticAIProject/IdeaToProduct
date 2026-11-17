@@ -349,7 +349,7 @@ window.exitStudio = function () {
 ═════════════════════════════════════════════════ */
 function startPolling() {
   clearInterval(State.pollTimer);
-  State.pollTimer = setInterval(pollStatus, 2500);
+  State.pollTimer = setInterval(pollStatus, 1000);
   pollStatus(); // immediate first poll
 }
 
@@ -1446,7 +1446,8 @@ function renderCodeView(code) {
   const el = $('view-code');
   if (!el) return;
   const files = code.files || [];
-  const firstFile = files[0];
+  const activePath = window._selectedCodePath || (files[0] ? files[0].path : '');
+  const activeFile = files.find(f => f.path === activePath) || files[0];
 
   el.innerHTML = `
     <div class="view-hd">
@@ -1456,18 +1457,21 @@ function renderCodeView(code) {
     </div>
 
     ${files.length ? `<div class="sec">
-      <div class="sec-title">File Tree</div>
+      <div class="sec-title">File Tree (${files.length} files)</div>
       <div class="code-workspace">
         <div class="cw-tree">
           <div class="cw-tree-title">Files</div>
-          ${files.map((f, i) => `
-            <div class="cw-file ${i === 0 ? 'active' : ''}" onclick="selectCodeFile(this)" data-path="${escHtml(f.path || '')}" data-desc="${escHtml(f.description || '')}">
+          ${files.map((f) => {
+            const isAct = f.path === (activeFile ? activeFile.path : '');
+            return `
+            <div class="cw-file ${isAct ? 'active' : ''}" onclick="selectCodeFile(this)" data-path="${escHtml(f.path || '')}" data-desc="${escHtml(f.description || '')}">
               <span class="cw-file-dot"></span>${escHtml(f.path || '')}
             </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
-        <div class="cw-content" id="cwContent">${firstFile
-      ? `<pre class="cw-source">${escHtml(firstFile.content || `// ${firstFile.path || 'File'} has not been returned yet.`)}</pre>`
+        <div class="cw-content" id="cwContent">${activeFile
+      ? `<pre class="cw-source">${escHtml(activeFile.content || `// ${activeFile.path || 'File'} has not been returned yet.`)}</pre>`
       : ''}</div>
       </div>
     </div>` : ''}
@@ -1490,13 +1494,16 @@ function renderCodeView(code) {
 window.selectCodeFile = function (fileEl) {
   document.querySelectorAll('.cw-file').forEach(f => f.classList.remove('active'));
   fileEl.classList.add('active');
+  const path = fileEl.dataset.path;
+  const desc = fileEl.dataset.desc;
+  window._selectedCodePath = path;
+
   const content = $('cwContent');
   if (content) {
-    const path = fileEl.dataset.path;
-    const desc = fileEl.dataset.desc;
     const sourceFiles = State.pipelineData?.code?.files || window.MockData?.code?.files || [];
     const selectedFile = sourceFiles.find(file => file.path === path) || {};
     content.innerHTML = `<pre class="cw-source">${escHtml(selectedFile.content || `// ${path}\n// ${desc}\n// Source content is not available yet.`)}</pre>`;
+    content.scrollTop = 0;
   }
 };
 

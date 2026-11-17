@@ -98,33 +98,51 @@ def Review_Agent(state: imports.AgentState) -> dict:
     """
     print("\nReview Agent received artifacts for review.")
 
-    # Format review input context
+    # Format review input context with bounded length to fit provider context windows
     code_artifact = state.get("code", {})
     code_files = code_artifact.get("files", [])
     files_summary = [
-        f"--- {f.get('path')}: {f.get('description', '')} ---\n{(f.get('content') or '')[:5000]}"
+        f"--- {f.get('path')}: {f.get('description', '')} ---\n{(f.get('content') or '')[:1200]}"
         for f in code_files if isinstance(f, dict)
     ]
     files_str = "\n\n".join(files_summary) if files_summary else "No files generated."
     code_notes = code_artifact.get("implementation_notes", [])
 
+    req = state.get('requirements', {})
+    req_summary = {
+        "problem_statement": req.get("problem_statement"),
+        "objectives": req.get("objectives", [])[:5],
+        "user_stories": [us.get("story", "") for us in req.get("user_stories", [])[:6]],
+        "acceptance_criteria": [ac.get("description", "") for ac in req.get("acceptance_criteria", [])[:8]],
+    }
+
+    design = state.get('design', {})
+    design_summary = {
+        "architecture_pattern": design.get("architecture_pattern"),
+        "tech_stack": design.get("tech_stack", {}),
+        "components": [c.get("name") for c in design.get("components", [])[:6]],
+        "api_endpoints": [f"{ep.get('method')} {ep.get('path')}" for ep in design.get("api_endpoints", [])[:8]],
+    }
+
+    test_results_summary = state.get('test_results', {})
+
     user_input = f"""=== PROJECT IDEA ===
 {state.get('idea', '')}
 
-=== REQUIREMENTS ===
-{state.get('requirements', {})}
+=== REQUIREMENTS SUMMARY ===
+{req_summary}
 
-=== DESIGN SPECIFICATION ===
-{state.get('design', {})}
+=== DESIGN SPECIFICATION SUMMARY ===
+{design_summary}
 
-=== GENERATED SOURCE CODE FILES ===
+=== GENERATED SOURCE CODE FILES (excerpts) ===
 {files_str}
 
-=== CODE AGENT NOTES (validation problems, decisions) ===
+=== CODE AGENT NOTES ===
 {code_notes}
 
 === AUTOMATED TEST RESULTS ===
-{state.get('test_results', {})}
+{test_results_summary}
 """
 
     response: Optional[ReviewResult] = None
@@ -133,12 +151,10 @@ def Review_Agent(state: imports.AgentState) -> dict:
         review_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/review_prompt.txt"))
         review_skill = imports.SystemMessage(content=imports.load_prompt("skills/review_skill.txt"))
 
-        review_llm = llm.with_structured_output(ReviewResult)
-        result = review_llm.invoke([
-            review_prompt,
-            review_skill,
-            imports.HumanMessage(content=user_input)
-        ])
+        result = imports.invoke_structured(
+            llm, ReviewResult,
+            [review_prompt, review_skill, imports.HumanMessage(content=user_input)]
+        )
 
         if result and isinstance(result, ReviewResult):
             response = result

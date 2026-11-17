@@ -155,7 +155,7 @@ def _write_files(
     test_files: Dict[str, str],
     temp_dir:   str,
 ) -> None:
-    """Write source and test files to *temp_dir* with path-traversal guard."""
+    """Write source and test files to *temp_dir* with path-traversal guard and UTF-8 encoding."""
     # -- Source files --------------------------------------------------------
     if isinstance(files, list):
         for entry in files:
@@ -164,14 +164,14 @@ def _write_files(
             if path and content is not None:
                 full = _safe_join(temp_dir, path)
                 os.makedirs(os.path.dirname(full), exist_ok=True)
-                with open(full, "w") as fh:
+                with open(full, "w", encoding="utf-8", errors="replace") as fh:
                     fh.write(content)
     elif isinstance(files, dict):
         for path, content in files.items():
             if path and content is not None:
                 full = _safe_join(temp_dir, path)
                 os.makedirs(os.path.dirname(full), exist_ok=True)
-                with open(full, "w") as fh:
+                with open(full, "w", encoding="utf-8", errors="replace") as fh:
                     fh.write(content)
 
     # -- Test files ----------------------------------------------------------
@@ -179,7 +179,7 @@ def _write_files(
         if path and content is not None:
             full = _safe_join(temp_dir, path)
             os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, "w") as fh:
+            with open(full, "w", encoding="utf-8", errors="replace") as fh:
                 fh.write(content)
 
 
