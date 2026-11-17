@@ -542,6 +542,7 @@ function populateLiveViews(result) {
     renderReviewView(result.review, result.approval_status);
   if (result.documentation && Object.keys(result.documentation).length)
     renderDocsView(result.documentation);
+  renderArtifactsViewLive(result);
   if (result.token_usage)
     renderTokenUsageView(result.token_usage);
 }
@@ -864,7 +865,7 @@ window.switchView = function (viewId) {
 
 function renderViewIfNeeded(viewId) {
   const el = $('view-' + viewId);
-  if (!el || el.dataset.rendered) return;
+  if (!el || (el.dataset.rendered && viewId !== 'artifacts' && viewId !== 'usage' && viewId !== 'projects')) return;
 
   const d = State.pipelineData;
   const mock = window.MockData || {};
@@ -1726,58 +1727,193 @@ function renderArtifactsView(artifacts) {
   el.dataset.rendered = '1';
 }
 
+function collectAllArtifacts(result) {
+  if (!result) return [];
+  const items = [];
+
+  // 1. Documentation Deliverables (Stage 6)
+  const docs = result.documentation || {};
+  const docSpecs = [
+    { name: 'README.md', desc: 'Project overview, architecture summary, run and test instructions', content: docs.readme, icon: '📄', stage: 'Docs', category: 'Documentation & Guides' },
+    { name: 'API_REFERENCE.md', desc: 'Complete REST endpoint specifications, request/response schemas, status codes', content: docs.api_reference, icon: '📡', stage: 'Docs', category: 'Documentation & Guides' },
+    { name: 'ARCHITECTURE.md', desc: 'System design, component breakdown, database schema, and error handling', content: docs.architecture_overview, icon: '🏛️', stage: 'Docs', category: 'Documentation & Guides' },
+    { name: 'USER_GUIDE.md', desc: 'End-user workflow guide with clear step-by-step instructions', content: docs.user_guide, icon: '📖', stage: 'Docs', category: 'Documentation & Guides' },
+    { name: 'CHANGELOG.md', desc: 'V1.0.0 release notes and verification record', content: docs.changelog, icon: '📜', stage: 'Docs', category: 'Documentation & Guides' },
+  ];
+  docSpecs.forEach(f => {
+    if (f.content && f.content.trim()) items.push(f);
+  });
+
+  // 2. Source Code Files (Stage 3)
+  const code = result.code || {};
+  const files = Array.isArray(code.files) ? code.files : [];
+  files.forEach(f => {
+    if (f && f.path && f.content) {
+      const ext = f.path.split('.').pop() || '';
+      let icon = '📄';
+      if (ext === 'py') icon = '🐍';
+      else if (ext === 'js' || ext === 'ts') icon = '⚡';
+      else if (ext === 'html') icon = '🌐';
+      else if (ext === 'css') icon = '🎨';
+      else if (ext === 'json') icon = '📦';
+      else if (ext === 'txt') icon = '📋';
+
+      items.push({
+        name: f.path,
+        desc: f.description || `Source file (${f.path})`,
+        content: f.content,
+        icon,
+        stage: 'Code',
+        category: 'Source Code Repository',
+      });
+    }
+  });
+
+  // 3. Specifications & Governance Deliverables (Stages 1, 2, 4, 5)
+  if (result.requirements && Object.keys(result.requirements).length) {
+    items.push({
+      name: 'requirements.json',
+      desc: 'Approved Product Requirements Document (PRD) with user stories and acceptance criteria',
+      content: JSON.stringify(result.requirements, null, 2),
+      icon: '📋',
+      stage: 'Requirements',
+      category: 'Specifications & Governance',
+    });
+  }
+  if (result.design && Object.keys(result.design).length) {
+    items.push({
+      name: 'system_design.json',
+      desc: 'Technical Architecture Specification (entities, endpoints, tech choices)',
+      content: JSON.stringify(result.design, null, 2),
+      icon: '📐',
+      stage: 'Design',
+      category: 'Specifications & Governance',
+    });
+  }
+  if (result.test_results && Object.keys(result.test_results).length) {
+    items.push({
+      name: 'test_report.json',
+      desc: `Automated Test Execution Summary (${result.test_results.passed_tests || 0} passed, ${result.test_results.failed_tests || 0} failed)`,
+      content: JSON.stringify(result.test_results, null, 2),
+      icon: '🧪',
+      stage: 'Tests',
+      category: 'Specifications & Governance',
+    });
+  }
+  if (result.review && Object.keys(result.review).length) {
+    items.push({
+      name: 'review_audit.json',
+      desc: `Quality Assurance Audit (${result.approval_status || 'review'} - score: ${result.review.quality_score ?? 'N/A'})`,
+      content: JSON.stringify(result.review, null, 2),
+      icon: '🛡️',
+      stage: 'Review',
+      category: 'Specifications & Governance',
+    });
+  }
+  if (result.market_analysis && Object.keys(result.market_analysis).length) {
+    items.push({
+      name: 'market_analysis.json',
+      desc: 'Kaggle startup success benchmark analysis and risk evaluation',
+      content: JSON.stringify(result.market_analysis, null, 2),
+      icon: '📈',
+      stage: 'Requirements',
+      category: 'Specifications & Governance',
+    });
+  }
+
+  return items;
+}
+
+window.toggleArtifactPreview = function(idx) {
+  const el = document.getElementById(`art-preview-${idx}`);
+  if (!el) return;
+  const isHidden = el.classList.toggle('hidden');
+  const btn = document.getElementById(`art-btn-prev-${idx}`);
+  if (btn) btn.textContent = isHidden ? 'Preview' : 'Hide';
+};
+
+window.copyArtifactContent = function(idx) {
+  const item = (window._currentArtifacts || [])[idx];
+  if (!item || !item.content) return;
+  navigator.clipboard.writeText(item.content).then(() => {
+    const btn = document.getElementById(`art-btn-copy-${idx}`);
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1800);
+    }
+  });
+};
+
 function renderArtifactsViewLive(result) {
   const el = $('view-artifacts');
   if (!el) return;
 
-  const stages = [];
-  if (result.requirements && Object.keys(result.requirements).length) {
-    stages.push({ name: 'Requirements', version: result.requirements_version || 1 });
+  const artifacts = collectAllArtifacts(result);
+  window._currentArtifacts = artifacts;
+
+  if (!artifacts.length) {
+    el.innerHTML = `
+      <div class="view-hd">
+        <div class="view-breadcrumb">Project</div>
+        <div class="view-title">Artifacts</div>
+        <div class="view-sub">Outputs and deliverables generated across pipeline stages.</div>
+      </div>
+      <div class="empty-state">
+        <div class="empty-state-icon">○</div>
+        <div class="empty-state-title">No artifacts generated yet</div>
+        <div class="empty-state-sub">Artifacts (code files, documentation, architecture specs, test suites) will appear here as each agent finishes.</div>
+      </div>
+    `;
+    return;
   }
-  if (result.design && Object.keys(result.design).length) {
-    stages.push({ name: 'Design', version: result.design_version || 1 });
-  }
-  if (result.code && Object.keys(result.code).length) {
-    stages.push({ name: 'Code', version: result.code_version || 1 });
-  }
-  if (result.test_results && Object.keys(result.test_results).length) {
-    stages.push({ name: 'Tests', version: result.test_version || 1 });
-  }
-  if (result.review && Object.keys(result.review).length) {
-    stages.push({ name: 'Review', version: result.review_version || 1 });
-  }
-  if (result.documentation && Object.keys(result.documentation).length) {
-    stages.push({ name: 'Documentation', version: result.documentation_version || 1 });
-  }
+
+  // Group by category
+  const categories = {};
+  artifacts.forEach((art, idx) => {
+    categories[art.category] = categories[art.category] || [];
+    categories[art.category].push({ ...art, idx });
+  });
+
+  const projectPath = result.generated_project_path || result.code?.generated_project_path || '';
 
   el.innerHTML = `
     <div class="view-hd">
       <div class="view-breadcrumb">Project</div>
-      <div class="view-title">Artifacts</div>
-      <div class="view-sub">Outputs generated by the pipeline.</div>
+      <div class="view-title">Project Deliverables & Artifacts (${artifacts.length} items)</div>
+      <div class="view-sub">Explore, inspect, and export all versioned documents, source code, and audits generated across stages.</div>
+      ${projectPath ? `<div class="view-sub" style="font-family:var(--font-mono);font-size:12px;margin-top:4px;">Workspace: ${escHtml(projectPath)}</div>` : ''}
     </div>
-    ${stages.length ? stages.map(s => `
+
+    ${Object.entries(categories).map(([catName, items]) => `
       <div class="art-group">
-        <div class="art-group-name">${escHtml(s.name)}</div>
-        <div class="art-versions">
-          <div class="art-ver">
-            <div class="art-ver-num">v${s.version}</div>
-            <div class="art-ver-info">
-              <div class="art-ver-changes">${escHtml(s.name)} output</div>
+        <div class="art-group-name">${escHtml(catName)} (${items.length})</div>
+        <div class="artifact-cards-list">
+          ${items.map(item => `
+            <div class="artifact-card" id="artifact-card-${item.idx}">
+              <div class="art-card-header">
+                <div class="art-card-left">
+                  <span class="art-file-icon">${item.icon || '📄'}</span>
+                  <div style="min-width:0;">
+                    <div class="art-file-name">${escHtml(item.name)}</div>
+                    <div class="art-file-desc">${escHtml(item.desc)}</div>
+                  </div>
+                </div>
+                <div class="art-card-actions">
+                  <span class="artifact-badge badge-done">${escHtml(item.stage)}</span>
+                  <button class="btn btn-sm btn-ghost" id="art-btn-prev-${item.idx}" onclick="window.toggleArtifactPreview(${item.idx})">Preview</button>
+                  <button class="btn btn-sm btn-ghost" id="art-btn-copy-${item.idx}" onclick="window.copyArtifactContent(${item.idx})">Copy</button>
+                </div>
+              </div>
+              <div class="art-preview hidden" id="art-preview-${item.idx}">
+                <pre><code>${escHtml(item.content)}</code></pre>
+              </div>
             </div>
-            <span class="artifact-badge badge-done">current</span>
-          </div>
+          `).join('')}
         </div>
       </div>
-    `).join('') : `
-      <div class="empty-state">
-        <div class="empty-state-icon">○</div>
-        <div class="empty-state-title">No artifacts yet</div>
-        <div class="empty-state-sub">Artifacts will appear as the pipeline produces outputs.</div>
-      </div>
-    `}
+    `).join('')}
   `;
-  el.dataset.rendered = '1';
 }
 
 /* ── Models view ─────────────────────────── */

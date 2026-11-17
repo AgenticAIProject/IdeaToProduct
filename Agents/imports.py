@@ -27,15 +27,15 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 # ── Model configuration ──────────────────────────────────────────────────────
-# Providers: "deepseek", "groq", "google", "ollama" (default: groq for speed & reliability)
-DEFAULT_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower().strip()
+# Providers: "deepseek", "groq", "google", "ollama" (default: deepseek for full-pipeline quality & reliability)
+DEFAULT_PROVIDER = os.environ.get("LLM_PROVIDER", "deepseek").lower().strip()
 GOOGLE_MODEL = os.environ.get("GEMINI_MODEL", os.environ.get("GOOGLE_MODEL", "gemini-3.8-flash"))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_CODE_MODEL = os.environ.get("GROQ_CODE_MODEL", "openai/gpt-oss-120b")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
-DEEPSEEK_CODE_MODEL = os.environ.get("DEEPSEEK_CODE_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
+DEEPSEEK_CODE_MODEL = os.environ.get("DEEPSEEK_CODE_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"))
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 _ALL_AGENTS = {"requirement", "design", "code", "test", "review", "documentation"}
 _RUNTIME_MODELS: dict[str, str] = {}
@@ -279,16 +279,16 @@ class _TrackedLLM:
 
 def _resolve_agent_provider(agent_type: str) -> str:
     """
-    Determine preferred provider for an agent type based on user priority:
-    - Code Agent: DeepSeek (primary) -> Groq -> Google
-    - Non-coding Agents (Requirement, Design, Test, Review, Docs): Groq (primary) -> Google (secondary) -> DeepSeek (third)
+    Determine preferred provider for an agent type:
+    - Code Agent: DeepSeek (deepseek-flash) is primary, with Groq -> Google fallback.
+    - Non-coding Agents: Groq is primary (via 3-key pool) -> Google (via 4-key pool) -> DeepSeek (third).
+    This strictly reserves DeepSeek quota for coding, ensuring zero rate-limit exhaustion during pipeline runs.
     """
     # Check explicit per-agent environment override:
     env_override = os.environ.get(f"PROVIDER_{agent_type.upper()}")
     if env_override:
         return env_override.lower().strip()
 
-    # Code agent: primary is DeepSeek
     if agent_type == "code":
         if os.environ.get("DEEPSEEK_API_KEY"):
             return "deepseek"
@@ -299,18 +299,15 @@ def _resolve_agent_provider(agent_type: str) -> str:
         if active_key:
             return "google"
 
-    # Non-coding agents:
-    # 1. Primary Priority: Groq (via 3-key pool)
+    # Non-coding agents: Groq primary (3 keys) -> Google secondary (4 keys) -> DeepSeek third
     groq_key, _ = _GROQ_KEY_POOL.get_active_key()
     if groq_key:
         return "groq"
 
-    # 2. Secondary Priority: Google Gemini (via 4-key pool)
     active_key, _ = _GEMINI_KEY_POOL.get_active_key()
     if active_key:
         return "google"
 
-    # 3. Third Priority: DeepSeek
     if os.environ.get("DEEPSEEK_API_KEY"):
         return "deepseek"
 
@@ -472,38 +469,36 @@ def _provider_fallback(llm: Any, max_tokens: int | None = None) -> Any:
     current_provider = getattr(llm, "provider", None)
     agent_type = getattr(llm, "_agent_type", "code")
 
-    # Code agent priority: Groq first, then Google
-    if agent_type == "code":
-        if current_provider != "groq":
-            active_key, _ = _GROQ_KEY_POOL.get_active_key()
-            if active_key:
-                print(f"  [LLM fallback] Code agent {current_provider} failed; falling back to Groq (depth {next_depth})...")
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True, fallback_depth=next_depth)
-        if current_provider != "google":
-            active_key, _ = _GEMINI_KEY_POOL.get_active_key()
-            if active_key:
-                print(f"  [LLM fallback] Code agent {current_provider} failed; falling back to Google Gemini (depth {next_depth})...")
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
-        return None
-
-    # Non-coding agents:
-    # 1. Secondary Priority: Google Gemini (if current was Groq)
-    if current_provider != "google":
-        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
-        if active_key:
-            print(f"  [LLM fallback] {current_provider} failed; falling back to Google Gemini (secondary, depth {next_depth})...")
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
-
-    # 2. Third Priority: DeepSeek (if Google also failed or unavailable)
-    if current_provider != "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
-        print(f"  [LLM fallback] {current_provider} failed; falling back to DeepSeek (third, depth {next_depth})...")
-        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True, fallback_depth=next_depth)
-
-    # If DeepSeek was the one that somehow failed, fall back to Groq
-    if current_provider != "groq":
+    # Priority order for fallback:
+    # 1. Groq (secondary priority) if current was DeepSeek
+    if current_provider == "deepseek":
         active_key, _ = _GROQ_KEY_POOL.get_active_key()
         if active_key:
-            print(f"  [LLM fallback] {current_provider} failed; falling back to Groq (depth {next_depth})...")
+            print(f"  [LLM fallback] DeepSeek failed; falling back to Groq (secondary, depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True, fallback_depth=next_depth)
+        active_gkey, _ = _GEMINI_KEY_POOL.get_active_key()
+        if active_gkey:
+            print(f"  [LLM fallback] DeepSeek & Groq failed; falling back to Google Gemini (tertiary, depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
+
+    # 2. If current provider was Groq: try DeepSeek first, then Google Gemini
+    if current_provider == "groq":
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            print(f"  [LLM fallback] Groq failed; falling back to DeepSeek (depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True, fallback_depth=next_depth)
+        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+        if active_key:
+            print(f"  [LLM fallback] Groq failed; falling back to Google Gemini (depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
+
+    # 3. If current provider was Google: try DeepSeek first, then Groq
+    if current_provider == "google":
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            print(f"  [LLM fallback] Google failed; falling back to DeepSeek (depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True, fallback_depth=next_depth)
+        active_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if active_key:
+            print(f"  [LLM fallback] Google failed; falling back to Groq (depth {next_depth})...")
             return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True, fallback_depth=next_depth)
 
     return None
@@ -519,7 +514,7 @@ def set_runtime_models(models: dict[str, str]) -> None:
 
 def load_prompt(filename: str) -> str:
     path = Path(__file__).resolve().parent / filename
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
 
@@ -553,21 +548,21 @@ def _extract_json_from_text(text: Any) -> dict:
 
     # Direct parse
     try:
-        return json.loads(text)
+        return json.loads(text, strict=False)
     except Exception:
         pass
     # Strip markdown fences
     fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
     if fenced:
         try:
-            return json.loads(fenced.group(1))
+            return json.loads(fenced.group(1), strict=False)
         except Exception:
             pass
     # First { ... } block
     brace = re.search(r"(\{[\s\S]*\})", text)
     if brace:
         try:
-            return json.loads(brace.group(1))
+            return json.loads(brace.group(1), strict=False)
         except Exception:
             pass
     raise ValueError(f"No valid JSON found in model output:\n{text[:500]}")
@@ -653,6 +648,18 @@ def _handle_structured_rate_limit_or_fallback(
     raw_llm = getattr(llm, "_llm", llm)
     active_key = getattr(raw_llm, "_api_key", None)
     agent_type = getattr(llm, "_agent_type", "requirement")
+
+    if provider == "deepseek":
+        # Handle transient burst rate limits (RPM spikes) before abandoning DeepSeek
+        retry_attempt = getattr(llm, "_rate_limit_retries", 0)
+        if retry_attempt < 1:
+            setattr(llm, "_rate_limit_retries", retry_attempt + 1)
+            print("  [invoke_structured] DeepSeek returned rate-limit/429. Pacing 3s for rate window before retry...")
+            time.sleep(3.0)
+            try:
+                return invoke_structured(llm, schema, messages, max_retries=max_retries)
+            except Exception as retry_exc:
+                exc = retry_exc
 
     if provider == "google":
         if active_key:

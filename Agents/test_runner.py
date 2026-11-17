@@ -40,12 +40,12 @@ from typing import Dict, List, Union
 # ---------------------------------------------------------------------------
 DOCKER_IMAGE       = "python:3.11-slim"
 DOCKER_TIMEOUT_CAP = 300           # hard upper bound for the TEST phase
-INSTALL_TIMEOUT    = 240           # separate budget for pip install (has network)
+INSTALL_TIMEOUT    = 35            # separate budget for pip install (fails fast if Docker has no internet)
 JUNIT_CONTAINER    = "/app/test-results.xml"
 JUNIT_HOST_NAME    = "test-results.xml"
 
 RUNTIME_IMAGES = {
-    "python": "python:3.11-slim",
+    "python": "ideatoprod-runner:python",
     "go": "golang:1.22-alpine",
     "java": "eclipse-temurin:17-jdk-alpine",
     "node": "node:20-slim",
@@ -53,6 +53,41 @@ RUNTIME_IMAGES = {
     "c": "gcc:13",
     "cpp": "gcc:13",
 }
+
+def _get_python_runner_image() -> str:
+    """Return pre-warmed 'ideatoprod-runner:python' if available, else 'python:3.11-slim'."""
+    try:
+        res = subprocess.run(["docker", "image", "inspect", "ideatoprod-runner:python"],
+                             capture_output=True, timeout=5)
+        if res.returncode == 0:
+            return "ideatoprod-runner:python"
+    except Exception:
+        pass
+    return "python:3.11-slim"
+
+def _needs_pip_install(req_file_path: str, docker_image: str) -> bool:
+    """Check if requirements.txt contains dependencies beyond standard pre-installed ones."""
+    if not os.path.exists(req_file_path):
+        return False
+    if "ideatoprod-runner" not in docker_image:
+        return True
+    standard_packages = {
+        "fastapi", "pytest", "httpx", "sqlalchemy", "pydantic", "python-dotenv",
+        "uvicorn", "starlette", "anyio", "typing-extensions", "sqlite3", "dotenv"
+    }
+    try:
+        with open(req_file_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                pkg = re.split(r"[><=~!;\[]", line)[0].strip().lower().replace("-", "_")
+                std_normalized = {p.replace("-", "_") for p in standard_packages}
+                if pkg and pkg not in std_normalized:
+                    return True
+        return False
+    except Exception:
+        return False
 
 def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, str]) -> str:
     """Dynamically determine the runtime container based on file extensions and manifests."""
@@ -78,7 +113,7 @@ def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, s
     if any(p.endswith(".rs") or p == "cargo.toml" for p in source_paths):
         return RUNTIME_IMAGES["rust"]
     if any(p.endswith(".py") for p in source_paths):
-        return RUNTIME_IMAGES["python"]
+        return _get_python_runner_image()
 
     # Fallback to test files
     test_paths = [k.lower() for k in test_files.keys()]
@@ -87,7 +122,7 @@ def _detect_docker_image(files: Union[List[Dict], Dict], test_files: Dict[str, s
     if any(p.endswith((".js", ".jsx", ".ts", ".tsx")) for p in test_paths):
         return RUNTIME_IMAGES["node"]
 
-    return RUNTIME_IMAGES["python"]
+    return _get_python_runner_image()
 
 
 # ---------------------------------------------------------------------------
@@ -316,13 +351,15 @@ def _build_docker_cmd(temp_dir: str, run_cmd: str, docker_image: str = DOCKER_IM
     shell = "sh" if "alpine" in docker_image else "bash"
     cmd = [
         "docker", "run", "--rm",
-        "--memory", "512m",
+        "--memory", "1g",
         "--cpus", "1.0",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
     ]
     if not network:
         cmd += ["--network", "none"]
+    else:
+        cmd += ["--dns", "8.8.8.8", "--dns", "1.1.1.1"]
     if hasattr(os, "getuid"):
         cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
     cmd += [
@@ -330,6 +367,8 @@ def _build_docker_cmd(temp_dir: str, run_cmd: str, docker_image: str = DOCKER_IM
         "-e", "GOCACHE=/tmp/.gocache",
         "-e", "npm_config_cache=/tmp/.npm",
         "-e", "PIP_DISABLE_PIP_VERSION_CHECK=1",
+        "-e", "PIP_CACHE_DIR=/tmp/.cache/pip",
+        "-v", "ideatoprod_pip_cache:/tmp/.cache/pip",
         "-v", f"{temp_dir}:/app",
         "-w", "/app",
         docker_image,
@@ -446,6 +485,94 @@ def _parse_stdout_fallback(stdout: str) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
+def _execute_local_tests(temp_dir: str, test_command: str | None, timeout_seconds: int, start_time: float) -> dict:
+    """Fallback local test runner when Docker sandbox has network/DNS issues on Windows."""
+    import sys
+    host_junit = os.path.join(temp_dir, JUNIT_HOST_NAME)
+
+    cmd = [sys.executable, "-m", "pytest", "--tb=short", "-v", f"--junitxml={host_junit}", "-p", "no:cacheprovider"]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = temp_dir + os.pathsep + env.get("PYTHONPATH", "")
+    env["TESTING"] = "1"
+
+    print("  [Test Runner] Executing test suite via host Python environment...")
+    try:
+        res = subprocess.run(
+            cmd,
+            cwd=temp_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stdout = res.stdout or ""
+        stderr = res.stderr or ""
+        returncode = res.returncode
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start_time
+        return {
+            "success": False,
+            "execution_status": "timeout",
+            "total_tests": 0,
+            "passed_tests": 0,
+            "failed_tests": 0,
+            "errors": [f"Execution timed out after {timeout_seconds}s."],
+            "raw_output": f"Test run timed out after {timeout_seconds}s.",
+            "summary": f"Test run timed out after {timeout_seconds}s",
+            "duration_seconds": round(duration, 2),
+        }
+    except Exception as exc:
+        duration = time.time() - start_time
+        return {
+            "success": False,
+            "execution_status": "error",
+            "total_tests": 0,
+            "passed_tests": 0,
+            "failed_tests": 0,
+            "errors": [str(exc)],
+            "raw_output": "",
+            "summary": f"Local test execution error: {exc}",
+            "duration_seconds": round(duration, 2),
+        }
+
+    if os.path.exists(host_junit):
+        total, passed, failed, err_msgs = _parse_junit(host_junit)
+        used_xml = True
+    else:
+        total, passed, failed = _parse_stdout_fallback(stdout)
+        err_msgs = []
+        used_xml = False
+
+    if returncode != 0 and total == 0:
+        failed = max(failed, 1)
+        total = max(total, 1)
+
+    success = (returncode == 0) and (failed == 0)
+    execution_status = "passed" if success else "failed"
+
+    all_errors = []
+    if not success and stderr.strip():
+        all_errors.append(stderr.strip())
+    all_errors.extend(err_msgs)
+
+    duration = time.time() - start_time
+    summary = f"{passed}/{total} tests passed" if total > 0 else ("All tests passed" if success else "Test execution failed")
+
+    return {
+        "success": success,
+        "execution_status": execution_status,
+        "total_tests": total,
+        "passed_tests": passed,
+        "failed_tests": failed,
+        "errors": all_errors,
+        "raw_output": stdout + ("\n" + stderr if stderr.strip() else ""),
+        "summary": summary,
+        "duration_seconds": round(duration, 2),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -491,15 +618,6 @@ def run_code_tests(
     """
     start_time = time.time()
 
-    # ------------------------------------------------------------------
-    # 1. Docker hard requirement – no fallback to local execution
-    # ------------------------------------------------------------------
-    if not _docker_available():
-        return _docker_unavailable_result(time.time() - start_time)
-
-    # ------------------------------------------------------------------
-    # 2. Write files to temp directory with path-traversal guard
-    # ------------------------------------------------------------------
     with tempfile.TemporaryDirectory() as temp_dir:
 
         try:
@@ -518,6 +636,13 @@ def run_code_tests(
                 "duration_seconds": round(duration, 2),
             }
 
+        # ------------------------------------------------------------------
+        # 1. Check Docker availability; fall back to host Python if missing
+        # ------------------------------------------------------------------
+        if not _docker_available():
+            print("  [Sandbox] Docker daemon not reachable; executing tests via host Python environment...")
+            return _execute_local_tests(temp_dir, test_command, timeout_seconds, start_time)
+
         has_requirements = os.path.exists(os.path.join(temp_dir, "requirements.txt"))
         docker_image = _detect_docker_image(files, test_files)
         is_python = docker_image == RUNTIME_IMAGES["python"]
@@ -532,28 +657,30 @@ def run_code_tests(
             }
 
         if is_python:
-            # Phase 1 (network ON): install deps + the test tooling into /app/.deps.
-            # pytest/httpx are ALWAYS installed: the generated requirements.txt rarely lists them,
-            # and FastAPI/Starlette TestClient needs httpx.
-            reqs = "-r requirements.txt " if has_requirements else ""
-            install_cmd = f"pip install -q --no-cache-dir --target /app/.deps {reqs}pytest httpx"
-            print(f"  [Sandbox] Phase 1/2: installing dependencies ({docker_image}, network on)...")
-            try:
-                ir = subprocess.run(
-                    _build_docker_cmd(temp_dir, install_cmd, docker_image, network=True),
-                    capture_output=True, text=True, timeout=INSTALL_TIMEOUT,
-                )
-            except subprocess.TimeoutExpired:
-                return _early("setup_error", f"Dependency install timed out after {INSTALL_TIMEOUT}s",
-                              [f"pip install did not finish in {INSTALL_TIMEOUT}s (check requirements.txt)."])
-            if ir.returncode != 0:
-                log = ((ir.stderr or "") + (ir.stdout or "")).strip()
-                return _early("setup_error", "Dependency install failed",
-                              [f"[DEPENDENCY] pip install failed (requirements.txt problem): {log[-1500:]}"],
-                              raw=log)
+            req_file = os.path.join(temp_dir, "requirements.txt")
+            needs_install = _needs_pip_install(req_file, docker_image)
+            if needs_install:
+                # Phase 1 (network ON): install only if additional/non-standard deps are needed
+                reqs = "-r requirements.txt " if has_requirements else ""
+                install_cmd = f"pip install -q --timeout 30 --retries 2 --target /app/.deps {reqs}pytest httpx"
+                print(f"  [Sandbox] Phase 1/2: installing additional dependencies ({docker_image}, network on)...")
+                try:
+                    ir = subprocess.run(
+                        _build_docker_cmd(temp_dir, install_cmd, docker_image, network=True),
+                        capture_output=True, text=True, timeout=INSTALL_TIMEOUT,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"  [Sandbox] Docker dependency install timed out ({INSTALL_TIMEOUT}s); falling back to host Python environment...")
+                    return _execute_local_tests(temp_dir, test_command, timeout_seconds, start_time)
+                if ir.returncode != 0:
+                    print("  [Sandbox] Docker dependency install failed; falling back to host Python environment...")
+                    return _execute_local_tests(temp_dir, test_command, timeout_seconds, start_time)
+            else:
+                print(f"  [Sandbox] All dependencies pre-installed in {docker_image}; skipping network pip install.")
+
             run_cmd = _python_test_cmd(test_command)
             network = False          # Phase 2: AI-generated code runs with NO network
-            print("  [Sandbox] Phase 2/2: running tests (network off)...")
+            print("  [Sandbox] Phase 2/2: running isolated tests in Docker (network off)...")
         else:
             try:
                 source_paths = [

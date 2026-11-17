@@ -47,29 +47,46 @@ PLACEHOLDER_MARKERS = (
 # Schemas (small on purpose)
 # ──────────────────────────────────────────────────────────────────────────────
 
-class FilePlan(BaseModel):
-    path: str = Field(description="Relative path, e.g. 'app.py', 'static/index.html', 'package.json'")
-    purpose: str = Field(description="One line: what this file is responsible for")
+class GeneratedFile(BaseModel):
+    path: str = Field(description="Relative path, e.g. 'app.py', 'models.py', 'schemas.py', 'database.py', 'requirements.txt', 'static/index.html'")
+    purpose: str = Field(default="", description="One line: what this file is responsible for")
     exports: list[str] = Field(
         default_factory=list,
         description="Public names other files/tests will use: functions, classes, routes, DOM ids",
     )
+    content: str = Field(default="", description="Complete source code. No placeholders, no ellipses, no '# ...'.")
     requirement_ids: list[str] = Field(default_factory=list)
     component_ids: list[str] = Field(default_factory=list)
 
 
-class CodePlan(BaseModel):
-    language: str = Field(description="Main language, e.g. python, javascript, go, java")
-    files: list[FilePlan] = Field(description="Every file needed to run the project. Do NOT include test files.")
-    run_command: str = Field(default="", description="Command to run the project")
-    test_command: str = Field(default="", description="Command to run tests, e.g. 'pytest --tb=short -v'")
+FilePlan = GeneratedFile
+
+
+class RepositoryGeneration(BaseModel):
+    language: str = Field(default="python", description="Main language, e.g. python, javascript, go, java")
+    run_command: str = Field(default="python app.py", description="Command to run the project")
+    test_command: str = Field(default="pytest --tb=short -v", description="Command to run tests, e.g. 'pytest --tb=short -v'")
     dependencies: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list, description="Implementation decisions NOT specified by the design")
+    notes: list[str] = Field(default_factory=list, description="Implementation decisions and architectural notes")
+    files: list[GeneratedFile] = Field(description="Every file needed to run the project. Do NOT include test files.")
+
+
+CodePlan = RepositoryGeneration
+
+
+class RepositoryRework(BaseModel):
+    notes: list[str] = Field(default_factory=list, description="Explanation of what was fixed")
+    files: list[GeneratedFile] = Field(description="Modified or new files that fix the errors and defects. Only include files that were updated or added.")
+
+
+class LayerGeneration(BaseModel):
+    notes: list[str] = Field(default_factory=list, description="Layer implementation decisions and exports")
+    files: list[GeneratedFile] = Field(description="Complete source files for this layer. No placeholders, no ellipses, no '# ...'.")
 
 
 class FixSelection(BaseModel):
     paths_to_change: list[str] = Field(description="Existing file paths that must be modified")
-    new_files: list[FilePlan] = Field(default_factory=list, description="New files that must be added, if any")
+    new_files: list[GeneratedFile] = Field(default_factory=list, description="New files that must be added, if any")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -397,6 +414,16 @@ def check_cross_file(files: dict[str, str]) -> list[str]:
     return sorted(set(problems))
 
 
+def write_file_to_disk(project_id: str, relative_path: str, content: str) -> str:
+    """Persist the latest generated file immediately so intermediate generation is inspectable."""
+    project_dir = WORKSPACE_ROOT / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    abs_path = project_dir / relative_path.lstrip("/").replace("\\", "/")
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(content, encoding="utf-8")
+    return str(abs_path)
+
+
 def ensure_requirements_txt(written: dict[str, str], plan: CodePlan, project_id: str) -> None:
     """Ensure requirements.txt exists and contains all imported third-party modules."""
     import sys
@@ -494,198 +521,428 @@ def _text(msg) -> str:
     return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in c)
 
 
-def complete_text(llm, messages: list) -> str:
-    """Plain-text completion that continues automatically if the model hit the token limit."""
-    out = ""
-    for _ in range(MAX_CONTINUATIONS + 1):
-        msg = llm.invoke(messages)
-        chunk = _text(msg)
-        out += chunk
-        finish = (getattr(msg, "response_metadata", None) or {}).get("finish_reason")
-        if finish != "length":
-            break
-        messages = messages + [
-            imports.AIMessage(content=chunk),
-            imports.HumanMessage(content="You were cut off. Continue EXACTLY where you stopped. "
-                                         "Output only the remaining code, no fences, no repetition."),
-        ]
-    return strip_fences(out)
+def extract_files_from_markdown(text: str) -> list[GeneratedFile]:
+    """Fallback extractor if model returns Markdown formatted with file headers and code fences."""
+    files: list[GeneratedFile] = []
+    seen_paths = set()
+
+    pat_header = re.compile(
+        r"(?:###\s*(?:[Ff]ile:\s*)?|(?:\*\*|__)(?:[Ff]ile:\s*)?|[Ff]ile:\s*`?)([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9_]+)(?:`?|\*\*|__)?\s*[:\n]+```[a-zA-Z0-9_\-]*\n([\s\S]*?)\n```",
+        re.MULTILINE
+    )
+    for path, content in pat_header.findall(text):
+        clean_path = path.strip().strip("`*\"'").lstrip("/").replace("\\", "/")
+        if clean_path and clean_path not in seen_paths and content.strip():
+            seen_paths.add(clean_path)
+            files.append(GeneratedFile(
+                path=clean_path,
+                purpose=f"Implementation file {clean_path}",
+                exports=[],
+                content=content.strip(),
+            ))
+
+    if not files:
+        pat_fence = re.compile(r"```[a-zA-Z0-9_\-]*\n(?:#|//|<!--)\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9_]+)\s*(?:-->)?\n([\s\S]*?)\n```")
+        for path, content in pat_fence.findall(text):
+            clean_path = path.strip().strip("`*\"'").lstrip("/").replace("\\", "/")
+            if clean_path and clean_path not in seen_paths and content.strip():
+                seen_paths.add(clean_path)
+                files.append(GeneratedFile(
+                    path=clean_path,
+                    purpose=f"Implementation file {clean_path}",
+                    exports=[],
+                    content=content.strip(),
+                ))
+
+    return files
 
 
-def build_system_prompt(design: dict) -> str:
-    base = imports.load_prompt("prompts/code_prompt.txt")
+def generate_repository_single_shot(
+    llm,
+    requirements: dict,
+    design: dict,
+    project_id: str,
+) -> tuple[RepositoryGeneration, dict[str, str]]:
+    req_ctx = requirements_context(requirements)
+    des_ctx = design_context(design)
     playbook = stack_skill(design, "CODE")
-    return base + f"""
 
-OUTPUT FORMAT FOR FILE CALLS
-- Output ONLY the raw content of the one requested file. No markdown fences, no commentary.
-- The file must be COMPLETE. Never write "...", "rest of code", or TODO placeholders.
-- Do NOT write test files. A separate QA agent writes tests against your code.
-- Use exactly the names listed in the plan's `exports`, so imports and tests resolve.
-- The project must run from its root directory with the plan's run_command.
+    base_prompt = imports.load_prompt("prompts/code_prompt.txt")
+    system_prompt = base_prompt + f"\n\n{playbook}"
 
-{playbook}
+    human_prompt = f"""Generate the COMPLETE source code repository for this project in ONE response.
+
+=== REQUIREMENTS & ACCEPTANCE CRITERIA ===
+{req_ctx}
+
+=== ARCHITECTURE & SYSTEM DESIGN (AUTHORITATIVE) ===
+{des_ctx}
+
+=== CRITICAL IMPLEMENTATION RULES ===
+1. Generate EVERY file required for the project to execute and pass tests (e.g. models, schemas, database, crud, app/main, requirements.txt, frontend assets if applicable).
+2. DO NOT include test files. A separate QA agent writes test suites.
+3. Every file must be COMPLETE. Do NOT leave TODOs, placeholders, elisions, or '# ...'.
+4. Ensure 100% internal consistency across all files:
+   - Match all imported class and function names with their definitions.
+   - For FastAPI apps:
+     * Populate ALL response model fields. Never return empty strings or None where a value is expected (e.g. compute short_url, long_url, created_at, tags).
+     * For redirects: return RedirectResponse(url=link.long_url), NEVER pass raw ORM objects or models to url.
+     * Implement required status codes: 201 Created for creation, 307/302 for redirects, 400 for invalid inputs (e.g. invalid URL scheme), 404 for not found, 410 for expired items.
+   - For Python projects, always include 'requirements.txt' with all third-party dependencies (fastapi, uvicorn, httpx, pytest, sqlalchemy, etc.).
 """
 
+    messages = [
+        imports.SystemMessage(content=system_prompt),
+        imports.HumanMessage(content=human_prompt),
+    ]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Steps
-# ──────────────────────────────────────────────────────────────────────────────
+    print("  [Code Agent] Generating complete repository in a single shot...")
+    repo = None
+    last_err = None
+    try:
+        repo = imports.invoke_structured(llm, RepositoryGeneration, messages)
+    except Exception as e:
+        last_err = e
+        print(f"  [Code Agent] Structured generation exception ({e}); attempting fallback extraction...")
+        try:
+            raw_msg = llm.invoke(messages)
+            raw_text = raw_msg.content if hasattr(raw_msg, "content") else str(raw_msg)
+            parsed_json = imports._extract_json_from_text(raw_text)
+            if isinstance(parsed_json, dict) and "files" in parsed_json:
+                repo = RepositoryGeneration.model_validate(parsed_json)
+            else:
+                extracted = extract_files_from_markdown(raw_text)
+                if extracted:
+                    repo = RepositoryGeneration(language="python", files=extracted)
+        except Exception as e2:
+            last_err = f"{last_err} | {e2}"
 
-def make_plan(llm, req_ctx: str, design: dict) -> CodePlan:
-    system = imports.SystemMessage(content=build_system_prompt(design))
-    human = imports.HumanMessage(content=f"""Plan the codebase.
+    if not repo or not repo.files:
+        raise RuntimeError(f"Code Agent failed to generate repository files: {last_err}")
+
+    written: dict[str, str] = {}
+    for f in repo.files:
+        clean_content = strip_fences(f.content)
+        f.content = clean_content
+        written[f.path] = clean_content
+        write_file_to_disk(project_id, f.path, clean_content)
+
+    return repo, written
+
+
+def needs_frontend_layer(design: dict, requirements: dict) -> bool:
+    """True if the system design or requirements call for static HTML/JS frontend assets."""
+    techs = " ".join(str(c.get("technology", "")) for c in design.get("technology_choices", []) if isinstance(c, dict)).lower()
+    system_type = str(design.get("system_type", "")).lower()
+    arch = str(design.get("architecture", "")).lower()
+    ui_desc = str(design.get("ui_description", "")).lower()
+    combined = f"{techs} {system_type} {arch} {ui_desc}"
+    return any(k in combined for k in ("frontend", "html", "web ui", "dashboard", "browser", "css", "static", "vanilla js", "react"))
+
+
+def generate_repository_layered(
+    llm,
+    requirements: dict,
+    design: dict,
+    project_id: str,
+) -> tuple[RepositoryGeneration, dict[str, str]]:
+    """
+    Hierarchical 3-Phase Generation:
+    1. Core Data Layer (models, schemas, database, requirements.txt)
+    2. Logic & Routes (crud, app/main) - given Layer 1's actual code
+    3. Frontend Assets (index.html, script.js, style.css) - given Layer 2's API endpoints
+    Keeps each call comfortably within 2k tokens and guarantees cross-file synchronization.
+    """
+    req_ctx = requirements_context(requirements)
+    des_ctx = design_context(design)
+    playbook = stack_skill(design, "CODE")
+    base_prompt = imports.load_prompt("prompts/code_prompt.txt")
+    system_prompt = base_prompt + f"\n\n{playbook}"
+
+    written: dict[str, str] = {}
+    all_files: list[GeneratedFile] = []
+    all_notes: list[str] = []
+
+    # ── Layer 1: Data Contracts, Schemas & Core Storage ─────────────────────
+    print("  [Code Agent] [Adaptive Layer 1/3] Generating Data Contracts & Schemas...")
+    prompt_p1 = f"""=== REQUIREMENTS ===
+{req_ctx}
+
+=== ARCHITECTURE & SYSTEM DESIGN ===
+{des_ctx}
+
+=== PHASE 1 TASK: DATA CONTRACTS & STORAGE LAYER ===
+Generate the foundational data and contract files:
+- For Python: database.py, models.py, schemas.py (Pydantic / ORM models), and requirements.txt.
+- Define all database tables, columns, indexes, relationships, and request/response validation schemas.
+- Ensure all field names and types match the design specification.
+- Every file must be COMPLETE. Do NOT leave placeholders or TODOs.
+"""
+    try:
+        p1 = imports.invoke_structured(llm, LayerGeneration, [
+            imports.SystemMessage(content=system_prompt),
+            imports.HumanMessage(content=prompt_p1),
+        ])
+        for f in p1.files:
+            clean = strip_fences(f.content)
+            f.content = clean
+            written[f.path] = clean
+            all_files.append(f)
+            write_file_to_disk(project_id, f.path, clean)
+        all_notes.extend(p1.notes)
+    except Exception as e:
+        print(f"  [Code Agent] Layer 1 error ({e}); attempting markdown extraction...")
+        raw = llm.invoke([imports.SystemMessage(content=system_prompt), imports.HumanMessage(content=prompt_p1)])
+        text = raw.content if hasattr(raw, "content") else str(raw)
+        extracted = extract_files_from_markdown(text)
+        for f in extracted:
+            written[f.path] = f.content
+            all_files.append(f)
+            write_file_to_disk(project_id, f.path, f.content)
+
+    # ── Layer 2: Business Logic & API Endpoints ──────────────────────────────
+    print("  [Code Agent] [Adaptive Layer 2/3] Generating Business Logic & REST Endpoints...")
+    p1_code_summary = "\n\n".join(f"--- {p} ---\n{c}" for p, c in written.items())
+    prompt_p2 = f"""=== REQUIREMENTS ===
+{req_ctx}
+
+=== ARCHITECTURE & SYSTEM DESIGN ===
+{des_ctx}
+
+=== UPSTREAM DATA CONTRACTS (FROM PHASE 1) ===
+{p1_code_summary}
+
+=== PHASE 2 TASK: BUSINESS LOGIC & API ENDPOINTS ===
+Generate the server and logic files:
+- For Python: crud.py (database query and mutation operations) and app.py (FastAPI application with all REST routes).
+- IMPORT AND USE the exact models and schemas defined in Phase 1 above!
+- In app.py:
+  * Implement ALL required endpoints, route paths, and HTTP methods.
+  * For redirects: return RedirectResponse(url=link.long_url), NEVER pass raw ORM objects or records to url.
+  * Populate ALL response schema fields (never return empty string or None for required fields like short_url, long_url, created_at).
+  * Enforce all acceptance criteria and status codes: 201 Created, 307/302 for redirects, 400 for invalid inputs, 404 for missing items, 410 for expired items, 409 for conflicts.
+- Every file must be COMPLETE. Do NOT leave placeholders or TODOs.
+"""
+    try:
+        p2 = imports.invoke_structured(llm, LayerGeneration, [
+            imports.SystemMessage(content=system_prompt),
+            imports.HumanMessage(content=prompt_p2),
+        ])
+        for f in p2.files:
+            clean = strip_fences(f.content)
+            f.content = clean
+            written[f.path] = clean
+            all_files.append(f)
+            write_file_to_disk(project_id, f.path, clean)
+        all_notes.extend(p2.notes)
+    except Exception as e:
+        print(f"  [Code Agent] Layer 2 error ({e}); attempting markdown extraction...")
+        raw = llm.invoke([imports.SystemMessage(content=system_prompt), imports.HumanMessage(content=prompt_p2)])
+        text = raw.content if hasattr(raw, "content") else str(raw)
+        extracted = extract_files_from_markdown(text)
+        for f in extracted:
+            written[f.path] = f.content
+            all_files.append(f)
+            write_file_to_disk(project_id, f.path, f.content)
+
+    # ── Layer 3: Frontend & Static UI (if web app) ───────────────────────────
+    if needs_frontend_layer(design, requirements):
+        print("  [Code Agent] [Adaptive Layer 3/3] Generating Frontend & Static UI...")
+        api_routes = [p for p in written.keys() if "app" in p or "main" in p or "api" in p]
+        app_code = "\n\n".join(f"--- {p} ---\n{written[p][:1500]}" for p in api_routes)
+        prompt_p3 = f"""=== REQUIREMENTS ===
+{req_ctx}
+
+=== SERVER API ENDPOINTS (FROM PHASE 2) ===
+{app_code}
+
+=== PHASE 3 TASK: FRONTEND & STATIC UI ===
+Generate the client files:
+- static/index.html (semantic, responsive UI layout with all required forms, controls, and containers)
+- static/script.js (JavaScript to interact with the backend API via fetch, handle events, update DOM)
+- static/style.css (clean, modern styling)
+- Connect all fetch() calls to the EXACT endpoint paths and JSON structures implemented in Phase 2.
+- Every file must be COMPLETE.
+"""
+        try:
+            p3 = imports.invoke_structured(llm, LayerGeneration, [
+                imports.SystemMessage(content=system_prompt),
+                imports.HumanMessage(content=prompt_p3),
+            ])
+            for f in p3.files:
+                clean = strip_fences(f.content)
+                f.content = clean
+                written[f.path] = clean
+                all_files.append(f)
+                write_file_to_disk(project_id, f.path, clean)
+            all_notes.extend(p3.notes)
+        except Exception as e:
+            print(f"  [Code Agent] Layer 3 error ({e}); attempting markdown extraction...")
+            raw = llm.invoke([imports.SystemMessage(content=system_prompt), imports.HumanMessage(content=prompt_p3)])
+            text = raw.content if hasattr(raw, "content") else str(raw)
+            extracted = extract_files_from_markdown(text)
+            for f in extracted:
+                written[f.path] = f.content
+                all_files.append(f)
+                write_file_to_disk(project_id, f.path, f.content)
+
+    repo = RepositoryGeneration(
+        language="python",
+        run_command="python app.py",
+        test_command="pytest --tb=short -v",
+        dependencies=[],
+        notes=all_notes,
+        files=all_files,
+    )
+    return repo, written
+
+
+def generate_repository_adaptive(
+    llm,
+    requirements: dict,
+    design: dict,
+    project_id: str,
+) -> tuple[RepositoryGeneration, dict[str, str]]:
+    """Adaptive code generator: uses single-shot for focused backend apps, layered for full-stack apps or upon truncation."""
+    has_frontend = needs_frontend_layer(design, requirements)
+    if has_frontend:
+        print("  [Code Agent] Full-stack / UI requirements detected; selecting Layered Repository Generation.")
+        return generate_repository_layered(llm, requirements, design, project_id)
+
+    print("  [Code Agent] Focused backend architecture detected; selecting Single-Shot Repository Generation.")
+    try:
+        repo, written = generate_repository_single_shot(llm, requirements, design, project_id)
+        if repo and repo.files and all(len(f.content.strip()) > 20 for f in repo.files):
+            return repo, written
+        print("  [Code Agent] Single-shot output incomplete; falling back to Layered Repository Generation.")
+    except Exception as e:
+        print(f"  [Code Agent] Single-shot generation exception ({e}); switching to Layered Repository Generation.")
+
+    return generate_repository_layered(llm, requirements, design, project_id)
+
+
+def rework_repository_single_shot(
+    llm,
+    requirements: dict,
+    design: dict,
+    prev_files: dict[str, str],
+    prev_plan: Optional[RepositoryGeneration],
+    state: AgentState,
+    project_id: str,
+) -> tuple[RepositoryGeneration, dict[str, str]]:
+    req_ctx = requirements_context(requirements)
+    des_ctx = design_context(design)
+    feedback = feedback_context(state)
+    playbook = stack_skill(design, "CODE")
+
+    base_prompt = imports.load_prompt("prompts/code_prompt.txt")
+    system_prompt = base_prompt + f"\n\n{playbook}"
+
+    file_dump = "\n\n".join(
+        f"=== FILE: {p} ===\n{content}" for p, content in prev_files.items()
+    )
+
+    human_prompt = f"""The previous code implementation failed automated tests or quality review.
+Analyze the exact failures below and return the COMPLETE modified or newly created files that fix all issues.
 
 === REQUIREMENTS ===
 {req_ctx}
 
-=== DESIGN (authoritative; follow its technology_choices) ===
-{design_context(design)}
+=== DESIGN ===
+{des_ctx}
 
-List every file needed to run this project (including the dependency manifest, e.g. requirements.txt
-or package.json). Keep it minimal: no files the design does not need. Do NOT list test files.
-For each file give the exact public names (`exports`) other files will rely on.
-Set test_command for the project's language (python: 'pytest --tb=short -v').""")
-    last_err = None
-    for _ in range(2):
+=== CURRENT CODEBASE ===
+{file_dump}
+
+=== PROBLEMS TO FIX (FAILING TESTS & REVIEW DEFECTS) ===
+{feedback}
+
+=== INSTRUCTIONS ===
+1. Analyze the failing test assertions, error messages, and review defects.
+2. Provide the COMPLETE updated code for all files that need changes to make all tests pass and resolve defects.
+3. Keep everything that already works. Do NOT omit code with placeholders or '...'.
+4. Ensure response schema fields, redirect URLs, status codes, and imports are fully corrected.
+"""
+
+    messages = [
+        imports.SystemMessage(content=system_prompt),
+        imports.HumanMessage(content=human_prompt),
+    ]
+
+    print("  [Code Agent] Reworking repository in a single shot...")
+    rework = None
+    try:
+        rework = imports.invoke_structured(llm, RepositoryRework, messages)
+    except Exception as e:
+        print(f"  [Code Agent] Structured rework exception ({e}); attempting fallback extraction...")
         try:
-            plan = imports.invoke_structured(llm, CodePlan, [system, human])
-            if plan and plan.files:
-                return plan
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-    raise RuntimeError(f"Could not create a code plan: {last_err}")
+            raw_msg = llm.invoke(messages)
+            raw_text = raw_msg.content if hasattr(raw_msg, "content") else str(raw_msg)
+            parsed_json = imports._extract_json_from_text(raw_text)
+            if isinstance(parsed_json, dict) and "files" in parsed_json:
+                rework = RepositoryRework.model_validate(parsed_json)
+            else:
+                extracted = extract_files_from_markdown(raw_text)
+                if extracted:
+                    rework = RepositoryRework(files=extracted)
+        except Exception as e2:
+            print(f"  [Code Agent] Rework fallback extraction failed: {e2}")
+
+    written = dict(prev_files)
+    if rework and rework.files:
+        for f in rework.files:
+            clean_content = strip_fences(f.content)
+            f.content = clean_content
+            written[f.path] = clean_content
+            write_file_to_disk(project_id, f.path, clean_content)
+        print(f"  [Code Agent] Rework updated {len(rework.files)} files: {[f.path for f in rework.files]}")
+
+    plan = prev_plan or RepositoryGeneration(language="python", files=[])
+    plan_file_map = {f.path: f for f in plan.files}
+    if rework and rework.files:
+        for f in rework.files:
+            plan_file_map[f.path] = f
+    plan.files = list(plan_file_map.values())
+    if rework and rework.notes:
+        plan.notes.extend(rework.notes)
+
+    return plan, written
 
 
-def generate_one_file(llm, fp: FilePlan, plan: CodePlan, requirements: dict, design: dict,
-                      written: dict[str, str], existing: Optional[str] = None, feedback: str = "") -> str:
-    plan_overview = "\n".join(f"- {f.path}: {f.purpose} | exports: {f.exports}" for f in plan.files)
-    interfaces = summarize_written_files(written, fp.path)
-    file_req = file_requirements_context(fp, requirements)
-    file_des = file_design_context(fp, design)
+def repair_single_file(llm, path: str, content: str, error: str, project_id: str) -> str:
+    """Targeted 1-shot repair if a single file has an unparseable syntax error."""
+    # Deterministic auto-fixes first
+    if "SyntaxError: 'os' module is used" in error and "import os" not in content:
+        fixed = "import os\n" + content
+        write_file_to_disk(project_id, path, fixed)
+        return fixed
+    if "SyntaxError: 'sqlite3' module is used" in error and "import sqlite3" not in content:
+        fixed = "import sqlite3\n" + content
+        write_file_to_disk(project_id, path, fixed)
+        return fixed
 
-    if existing is not None:
-        task = (f"MODIFY the existing file `{fp.path}` to fix the problems below. Keep everything that works. "
-                f"Output the complete updated file.\n\n--- current {fp.path} ---\n{existing}\n\n"
-                f"=== PROBLEMS TO FIX ===\n{feedback}")
-    else:
-        task = f"Write the complete file `{fp.path}` ({fp.purpose}). Exports: {fp.exports}."
+    prompt = f"""The file `{path}` has a validation error:
+{error}
 
-    human = imports.HumanMessage(content=f"""=== REQUIREMENTS (FOR THIS COMPONENT) ===
-{file_req}
+Here is the current content of `{path}`:
+{content}
 
-=== ARCHITECTURE & TECH CHOICES ===
-{file_des}
+Please return the COMPLETE, corrected file content. Do NOT include markdown commentary or placeholders."""
 
-=== CODEBASE PLAN ===
-{plan_overview}
-run_command: {plan.run_command}
+    try:
+        msg = llm.invoke([
+            imports.SystemMessage(content="You are an expert software developer. Fix the syntax/validation error and output ONLY the complete corrected file."),
+            imports.HumanMessage(content=prompt),
+        ])
+        repaired = strip_fences(_text(msg))
+        if repaired and not validate_file(path, repaired):
+            write_file_to_disk(project_id, path, repaired)
+            return repaired
+    except Exception as e:
+        print(f"  [Code Agent] Single-file repair failed for {path}: {e}")
 
-=== PREVIOUSLY GENERATED FILES (SIGNATURES & EXPORTS) ===
-{interfaces or '(none yet - this is the first file)'}
+    return content
 
-=== TASK ===
-{task}""")
-    return complete_text(llm, [imports.SystemMessage(content=build_system_prompt(design)), human])
-
-
-def write_file_to_disk(project_id: str, relative_path: str, content: str) -> str:
-    """Persist the latest generated file immediately so intermediate generation is inspectable."""
-    project_dir = WORKSPACE_ROOT / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    abs_path = project_dir / relative_path.lstrip("/")
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    abs_path.write_text(content, encoding="utf-8")
-    return str(abs_path)
-
-
-def generate_and_fix(llm, fp, plan, requirements, design, written, project_id: str, existing=None, feedback="") -> tuple[str, Optional[str]]:
-    """Generate one file, validate it, repair with the real error up to MAX_REPAIR_ATTEMPTS."""
-    content = generate_one_file(llm, fp, plan, requirements, design, written, existing, feedback)
-    write_file_to_disk(project_id, fp.path, content)
-    error = validate_file(fp.path, content)
-    attempt = 0
-    while error and attempt < MAX_REPAIR_ATTEMPTS:
-        attempt += 1
-        print(f"  [Code Agent] {fp.path} failed validation ({error[:120]}) - repair {attempt}/{MAX_REPAIR_ATTEMPTS}")
-        content = generate_one_file(
-            llm, fp, plan, requirements, design, written,
-            existing=content,
-            feedback=f"Validation error: {error}\nReturn the complete corrected file.",
-        )
-        write_file_to_disk(project_id, fp.path, content)
-        error = validate_file(fp.path, content)
-    return content, error
-
-
-def order_files(files: list[FilePlan]) -> list[FilePlan]:
-    """Manifests last, so they can list the imports that were actually used."""
-    return sorted(files, key=lambda f: os.path.basename(f.path).lower() in MANIFESTS)
-
-
-def expand_dependent_targets(targets: list[str], all_files: dict[str, str]) -> list[str]:
-    """Ensure any file dependent on or paired with changed files is also updated to prevent desynchronization."""
-    expanded = set(targets)
-    changed = True
-    while changed:
-        changed = False
-        for target in list(expanded):
-            target_base = os.path.splitext(os.path.basename(target))[0]
-            target_ext = os.path.splitext(target)[1].lower()
-
-            # 1. Frontend coupling: logic.js and app.js must stay in sync
-            if target == "logic.js" and "app.js" in all_files and "app.js" not in expanded:
-                expanded.add("app.js")
-                changed = True
-            elif target == "app.js" and "logic.js" in all_files and "logic.js" not in expanded:
-                expanded.add("logic.js")
-                changed = True
-
-            # 2. C / C++ coupling: .h and .c pairs, or files #including the target
-            elif target_ext in (".h", ".hpp"):
-                for ext in (".c", ".cpp", ".cc"):
-                    impl = target_base + ext
-                    if impl in all_files and impl not in expanded:
-                        expanded.add(impl)
-                        changed = True
-                for other_path, other_content in all_files.items():
-                    if other_path not in expanded and (f'"{target}"' in other_content or f'<{target}>' in other_content or target in other_content):
-                        expanded.add(other_path)
-                        changed = True
-            elif target_ext in (".c", ".cpp", ".cc"):
-                for ext in (".h", ".hpp"):
-                    hdr = target_base + ext
-                    if hdr in all_files and hdr not in expanded:
-                        expanded.add(hdr)
-                        changed = True
-
-            # 3. Python coupling: any file importing the modified module
-            elif target_ext == ".py":
-                for other_path, other_content in all_files.items():
-                    if other_path.endswith(".py") and other_path not in expanded:
-                        if re.search(rf"\b(?:from|import)\s+{re.escape(target_base)}\b", other_content):
-                            expanded.add(other_path)
-                            changed = True
-
-    # Upstream dependencies generated first so downstream files receive their updated signatures!
-    def _rank(p: str) -> int:
-        pl = p.lower()
-        if pl.endswith((".h", ".hpp")):
-            return 0
-        if any(k in pl for k in ("logic", "model", "schema")):
-            return 1
-        if any(k in pl for k in ("store", "service", "calc", "db")):
-            return 2
-        if any(k in pl for k in ("app", "main", "cli", "server", "view")):
-            return 3
-        return 4
-
-    return sorted(expanded, key=_rank)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Agent
-# ──────────────────────────────────────────────────────────────────────────────
 
 def Code_Agent(state: AgentState) -> dict:
     print("\nCode Agent: generating implementation from design...")
@@ -697,96 +954,44 @@ def Code_Agent(state: AgentState) -> dict:
 
     design = state.get("design", {})
     requirements = state.get("requirements", {})
-    req_ctx = requirements_context(requirements)
 
     code_version = state.get("code_version", 0) + 1
     retry_count = dict(state.get("retry_count", {}))
     previous = state.get("code") or {}
     prev_files = {f["path"]: f["content"] for f in previous.get("files", []) if isinstance(f, dict)}
     is_rework = bool(prev_files) and code_version > 1
-    is_review_retry = is_rework and state.get("approval_status") == "rejected"
 
-    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "4000"))
+    file_tokens = int(os.environ.get("CODE_MAX_TOKENS", "8000"))
     provider = os.environ.get("PROVIDER_CODE") or ("deepseek" if os.environ.get("DEEPSEEK_API_KEY") else ("groq" if os.environ.get("GROQ_API_KEY") else None))
     print(f"  [Code Agent] Requesting provider: {provider or 'default'}")
     llm = imports.get_llm(agent_type="code", max_tokens=file_tokens, provider=provider)
-    plan_llm = imports.get_llm(agent_type="code", max_tokens=2000, provider=provider)
 
     written: dict[str, str] = {}
-    meta: dict[str, FilePlan] = {}
     errors: dict[str, str] = {}
+    plan: Optional[RepositoryGeneration] = None
 
     try:
         if not is_rework:
-            # ── First pass: plan, then generate file by file ───────────────────
-            plan = make_plan(plan_llm, req_ctx, design)
-            # Ensure requirements.txt is in the plan if this is a Python project
-            is_py = (
-                getattr(plan, "language", "").lower() == "python"
-                or any(f.path.endswith(".py") for f in plan.files)
-                or any("python" in str(c.get("technology", "")).lower() for c in design.get("technology_choices", []))
-            )
-            if is_py and not any(os.path.basename(f.path).lower() == "requirements.txt" for f in plan.files):
-                print("  [Code Agent] Python project detected; injecting requirements.txt into the file plan.")
-                plan.files.append(FilePlan(
-                    path="requirements.txt",
-                    purpose="List third-party Python package dependencies for pip install",
-                    exports=[],
-                ))
-            print(f"  [Code Agent] Plan: {[f.path for f in plan.files]}")
-            for fp in order_files(plan.files):
-                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id)
-                written[fp.path] = content
-                meta[fp.path] = fp
-                if err:
-                    errors[fp.path] = err
-                time.sleep(1.0)  # Gentle pacing between file generations to stay below RPM limit
+            plan, written = generate_repository_adaptive(llm, requirements, design, project_id)
         else:
-            # ── Rework: only touch the files that need it ──────────────────────
-            plan = CodePlan(**previous["plan"]) if previous.get("plan") else None
-            feedback = feedback_context(state)
-            if plan is None:
-                plan = CodePlan(language="", files=[FilePlan(path=p, purpose="") for p in prev_files])
-            meta = {f.path: f for f in plan.files}
-            written = dict(prev_files)
+            prev_plan = RepositoryGeneration(**previous["plan"]) if previous.get("plan") else None
+            plan, written = rework_repository_single_shot(llm, requirements, design, prev_files, prev_plan, state, project_id)
 
-            selection = None
-            try:
-                selection = imports.invoke_structured(plan_llm, FixSelection, [
-                    imports.SystemMessage(content="Decide which files must change to fix the problems. "
-                                                  "Prefer the smallest set. Do not include test files."),
-                    imports.HumanMessage(content=f"Files: {list(prev_files)}\n\n{feedback}"),
-                ])
-            except Exception as e:  # noqa: BLE001
-                print(f"  [Code Agent] File selection failed ({e}); regenerating all files.")
-
-            targets = [p for p in (selection.paths_to_change if selection else []) if p in prev_files] or list(prev_files)
-            targets = expand_dependent_targets(targets, prev_files)
-            new_files = selection.new_files if selection else []
-            print(f"  [Code Agent] Rework targets (with dependencies): {targets} (+{[f.path for f in new_files]} new)")
-
-            for p in targets:
-                fp = meta.get(p) or FilePlan(path=p, purpose="")
-                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id,
-                                                existing=prev_files[p], feedback=feedback)
-                written[p] = content
-                if err:
-                    errors[p] = err
-                time.sleep(1.0)
-            for fp in new_files:
-                plan.files.append(fp)
-                meta[fp.path] = fp
-                content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id)
-                written[fp.path] = content
-                if err:
-                    errors[fp.path] = err
-                time.sleep(1.0)
+        # Validate each file and run targeted repair if needed
+        for path, content in list(written.items()):
+            err = validate_file(path, content)
+            if err:
+                print(f"  [Code Agent] {path} failed validation ({err[:100]}) - running targeted fix...")
+                fixed_content = repair_single_file(llm, path, content, err, project_id)
+                written[path] = fixed_content
+                re_err = validate_file(path, fixed_content)
+                if re_err:
+                    errors[path] = re_err
     except Exception as e:  # noqa: BLE001
-        # No template fallback: surface the real failure.
         print(f"  [Code Agent] Generation failed: {e}")
         if any(k in str(e).lower() for k in ("credit", "402", "401", "api key", "quota", "rate limit")):
             print("  [Code Agent] This is an account/provider problem (credits, key or rate limit), not a code problem. "
-                  "Check openrouter.ai/credits, then re-run.")
+                  "Check openrouter.ai/credits or API keys, then re-run.")
         return {
             "code": {"files": [], "generation_error": str(e)},
             "code_version": code_version,
@@ -801,11 +1006,9 @@ def Code_Agent(state: AgentState) -> dict:
 
     # ── Ensure Python projects have a valid requirements.txt with all detected imports ──
     ensure_requirements_txt(written, plan, project_id)
-    if "requirements.txt" in written and "requirements.txt" not in meta:
-        meta["requirements.txt"] = FilePlan(path="requirements.txt", purpose="Project dependencies", exports=[])
 
     cross = check_cross_file(written)
-    notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]
+    notes = list(plan.notes if plan else []) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]
 
     # ── Write to disk ────────────────────────────────────────────────────────
     scaffold = repo_scaffold.invoke({
@@ -814,6 +1017,11 @@ def Code_Agent(state: AgentState) -> dict:
     })
     project_path = scaffold.get("project_path", "")
     print(f"  [Code Agent] Wrote {len(written)} files to: {project_path}")
+
+    meta = {f.path: f for f in (plan.files if plan else [])}
+    for p in written:
+        if p not in meta:
+            meta[p] = GeneratedFile(path=p, purpose="Project file", exports=[], content=written[p])
 
     code_artifact = {
         "files": [
@@ -827,11 +1035,11 @@ def Code_Agent(state: AgentState) -> dict:
             }
             for p, c in written.items()
         ],
-        "plan": plan.model_dump(),
-        "dependencies": plan.dependencies,
-        "setup_instructions": plan.run_command,
+        "plan": plan.model_dump() if plan else {},
+        "dependencies": plan.dependencies if plan else [],
+        "setup_instructions": plan.run_command if plan else "python app.py",
         "implementation_notes": notes,
-        "test_command": plan.test_command,
+        "test_command": plan.test_command if plan else "pytest --tb=short -v",
         "generated_project_path": project_path,
         "files_written": scaffold.get("files_written", []),
         "validation_errors": errors,

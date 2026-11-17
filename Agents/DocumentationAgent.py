@@ -1,3 +1,4 @@
+import os
 import imports
 import json
 from pydantic import BaseModel, Field
@@ -96,7 +97,7 @@ Description: {f.get('description', '')}
 Exports: {f.get('exports', [])}
 Requirement IDs: {f.get('requirement_ids', [])}
 Key code excerpt:
-{(f.get('content') or '')[:2000]}"""
+{(f.get('content') or '')[:1000]}"""
             for f in code_files if isinstance(f, dict)
         )
     elif isinstance(code_files, dict):
