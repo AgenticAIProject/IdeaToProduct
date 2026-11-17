@@ -42,28 +42,37 @@ _RUNTIME_MODELS: dict[str, str] = {}
 _TOKEN_USAGE: dict[str, dict[str, int | str]] = {}
 
 
-class GeminiKeyPool:
-    """Manages a pool of Google Gemini API keys with automatic rotation and 429 quota backoff."""
+class APIKeyPool:
+    """Manages a pool of API keys for a provider with rotation and 429 quota/rate-limit backoff."""
 
-    def __init__(self):
+    def __init__(self, provider_name: str, env_singles: tuple[str, ...], env_prefixes: tuple[str, ...], default_penalty: float = 300.0):
+        self.provider_name = provider_name
+        self.env_singles = env_singles
+        self.env_prefixes = env_prefixes
+        self.default_penalty = default_penalty
         self._lock = threading.Lock()
         self._exhausted_until: dict[str, float] = {}
         self._index = 0
 
     def get_keys(self) -> list[str]:
-        keys = []
-        for var in ("GOOGLE_API_KEYS", "GEMINI_API_KEYS", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+        keys: list[str] = []
+        for var in self.env_singles:
             val = os.environ.get(var, "").strip()
             if val:
                 for k in val.split(","):
                     k = k.strip().strip("'").strip('"')
                     if k and k not in keys:
                         keys.append(k)
+        numbered = []
         for var, val in os.environ.items():
-            if (var.startswith("GOOGLE_API_KEY_") or var.startswith("GEMINI_API_KEY_")) and val.strip():
+            if any(var.startswith(p) for p in self.env_prefixes) and val.strip():
                 clean_k = val.strip().strip("'").strip('"')
-                if clean_k and clean_k not in keys:
-                    keys.append(clean_k)
+                if clean_k:
+                    numbered.append((var, clean_k))
+        numbered.sort(key=lambda x: x[0])
+        for _, clean_k in numbered:
+            if clean_k not in keys:
+                keys.append(clean_k)
         return keys
 
     def get_active_key(self) -> tuple[str | None, int]:
@@ -76,24 +85,41 @@ class GeminiKeyPool:
             available = [k for k in all_keys if self._exhausted_until.get(k, 0) <= now]
             if not available:
                 return None, 0
+            key = available[self._index % len(available)]
             self._index = (self._index + 1) % len(available)
-            return available[self._index], len(available)
+            return key, len(available)
 
-    def mark_exhausted(self, key: str, penalty_seconds: float = 3600.0) -> None:
-        """Mark a key as quota-exhausted so requests immediately use the next key."""
+    def mark_exhausted(self, key: str, penalty_seconds: float | None = None) -> None:
+        """Mark a key as quota-exhausted so requests immediately rotate to the next key in pool."""
+        penalty = penalty_seconds if penalty_seconds is not None else self.default_penalty
         with self._lock:
-            self._exhausted_until[key] = time.time() + penalty_seconds
+            self._exhausted_until[key] = time.time() + penalty
             masked = key[:6] + "..." + key[-4:] if len(key) > 10 else "***"
             now = time.time()
             active_count = sum(1 for k in self.get_keys() if self._exhausted_until.get(k, 0) <= now)
-            print(f"  [Gemini Key Pool] Key {masked} hit quota/429 limit; rotated away ({active_count} active keys remaining in pool).")
+            print(f"  [{self.provider_name} Key Pool] Key {masked} hit quota/429 limit; rotated away for {int(penalty)}s ({active_count} active keys remaining in pool).")
 
     def reset(self) -> None:
         with self._lock:
             self._exhausted_until.clear()
 
 
-_GEMINI_KEY_POOL = GeminiKeyPool()
+_GEMINI_KEY_POOL = APIKeyPool(
+    provider_name="Gemini",
+    env_singles=("GOOGLE_API_KEYS", "GEMINI_API_KEYS", "GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    env_prefixes=("GOOGLE_API_KEY_", "GEMINI_API_KEY_"),
+    default_penalty=300.0,
+)
+
+_GROQ_KEY_POOL = APIKeyPool(
+    provider_name="Groq",
+    env_singles=("GROQ_API_KEYS", "GROQ_API_KEY"),
+    env_prefixes=("GROQ_API_KEY_",),
+    default_penalty=90.0,
+)
+
+# Compatibility alias
+GeminiKeyPool = APIKeyPool
 
 
 def _default_model_name() -> str:
@@ -202,15 +228,24 @@ class _TrackedLLM:
         try:
             response = self._llm.invoke(*args, **kwargs)
         except Exception as exc:
-            if self.provider == "google" and _is_rate_limit_error(exc):
+            if _is_rate_limit_error(exc):
                 active_key = getattr(self._llm, "_api_key", None)
-                if active_key:
-                    _GEMINI_KEY_POOL.mark_exhausted(active_key)
-                next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
-                if next_key and total_active > 0:
-                    print(f"  [LLM] Rotating to next Gemini API key in pool ({total_active} active)...")
-                    next_llm = get_llm(agent_type=self._agent_type, provider="google", is_fallback=self.is_fallback)
-                    return next_llm.invoke(*args, **kwargs)
+                if self.provider == "google":
+                    if active_key:
+                        _GEMINI_KEY_POOL.mark_exhausted(active_key)
+                    next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+                    if next_key and total_active > 0:
+                        print(f"  [LLM] Rotating to next Gemini API key in pool ({total_active} active)...")
+                        next_llm = get_llm(agent_type=self._agent_type, provider="google", is_fallback=self.is_fallback)
+                        return next_llm.invoke(*args, **kwargs)
+                elif self.provider == "groq":
+                    if active_key:
+                        _GROQ_KEY_POOL.mark_exhausted(active_key)
+                    next_key, total_active = _GROQ_KEY_POOL.get_active_key()
+                    if next_key and total_active > 0:
+                        print(f"  [LLM] Rotating to next Groq API key in pool ({total_active} active)...")
+                        next_llm = get_llm(agent_type=self._agent_type, provider="groq", is_fallback=self.is_fallback)
+                        return next_llm.invoke(*args, **kwargs)
             if self.is_fallback:
                 raise
             fallback_llm = _provider_fallback(self)
@@ -251,7 +286,8 @@ def _resolve_agent_provider(agent_type: str) -> str:
     if agent_type == "code":
         if os.environ.get("DEEPSEEK_API_KEY"):
             return "deepseek"
-        if os.environ.get("GROQ_API_KEY"):
+        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if groq_key:
             return "groq"
 
     # Simple tasks: Documentation, Review prefer Google Gemini if keys available
@@ -259,7 +295,8 @@ def _resolve_agent_provider(agent_type: str) -> str:
         active_key, _ = _GEMINI_KEY_POOL.get_active_key()
         if active_key:
             return "google"
-        if os.environ.get("GROQ_API_KEY"):
+        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if groq_key:
             return "groq"
 
     # Requirement agent: prefer Google Gemini if active key available, else Groq
@@ -267,12 +304,14 @@ def _resolve_agent_provider(agent_type: str) -> str:
         active_key, _ = _GEMINI_KEY_POOL.get_active_key()
         if active_key:
             return "google"
-        if os.environ.get("GROQ_API_KEY"):
+        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if groq_key:
             return "groq"
 
     # Design and Test: prefer Groq (or DeepSeek) for fast execution
     if agent_type in ("design", "test"):
-        if os.environ.get("GROQ_API_KEY"):
+        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if groq_key:
             return "groq"
         if os.environ.get("DEEPSEEK_API_KEY"):
             return "deepseek"
@@ -290,7 +329,7 @@ def get_llm(
     Build a tracked LLM with per-agent role routing and fallback resilience.
     - Code Agent defaults to DeepSeek (using DEEPSEEK_CODE_MODEL) when configured.
     - Simple tasks (review, documentation, requirements) default to Google Gemini with multi-key pool rotation.
-    - Groq provides ultra-fast generation and reliable fallback.
+    - Groq provides ultra-fast generation and multi-key pool fallback.
     """
     if provider is None:
         selected_provider = _resolve_agent_provider(agent_type)
@@ -300,7 +339,8 @@ def get_llm(
     if selected_provider == "deepseek":
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
         if not deepseek_key:
-            if os.environ.get("GROQ_API_KEY") and not is_fallback:
+            groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+            if groq_key and not is_fallback:
                 print("  [LLM] DEEPSEEK_API_KEY not configured; falling back to Groq.")
                 return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
             raise RuntimeError(
@@ -332,12 +372,18 @@ def get_llm(
         ), agent_type, provider="deepseek", is_fallback=is_fallback)
 
     if selected_provider == "groq":
-        groq_key = os.environ.get("GROQ_API_KEY")
+        groq_key, total_active = _GROQ_KEY_POOL.get_active_key()
         if not groq_key:
-            print("  [LLM] GROQ_API_KEY not configured; falling back to DeepSeek or Google.")
-            if os.environ.get("DEEPSEEK_API_KEY"):
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=is_fallback)
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=is_fallback)
+            print("  [LLM] No active Groq keys in pool (all exhausted or none configured); falling back to DeepSeek or Google.")
+            if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True)
+            active_gkey, _ = _GEMINI_KEY_POOL.get_active_key()
+            if active_gkey and not is_fallback:
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=True)
+            raise RuntimeError(
+                "GROQ_API_KEY is required in your .env file to use Groq models. "
+                "Get a free API key from https://console.groq.com"
+            )
         try:
             from langchain_groq import ChatGroq
         except ImportError as exc:
@@ -350,18 +396,21 @@ def get_llm(
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         })
         usage["model"] = selected_model
-        return _TrackedLLM(ChatGroq(
+        groq_llm = ChatGroq(
             model=selected_model,
             api_key=groq_key,
             max_tokens=max_tokens,
             temperature=0,
-        ), agent_type, provider="groq", is_fallback=is_fallback)
+        )
+        setattr(groq_llm, "_api_key", groq_key)
+        return _TrackedLLM(groq_llm, agent_type, provider="groq", is_fallback=is_fallback)
 
     if selected_provider == "google":
         key, total_active = _GEMINI_KEY_POOL.get_active_key()
         if not key:
             print("  [LLM] No active Google Gemini keys in pool (all exhausted or none configured); falling back to Groq / DeepSeek.")
-            if os.environ.get("GROQ_API_KEY") and not is_fallback:
+            groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+            if groq_key and not is_fallback:
                 return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
             if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
                 return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True)
@@ -416,17 +465,19 @@ def _provider_fallback(llm: Any, max_tokens: int | None = None) -> Any:
     current_provider = getattr(llm, "provider", None)
     agent_type = getattr(llm, "_agent_type", "code")
 
-    # Priority 1: Groq for fast and reliable inference
-    if current_provider != "groq" and os.environ.get("GROQ_API_KEY"):
-        print(f"  [LLM fallback] {current_provider} call failed; falling back to Groq...")
-        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True)
+    # Priority 1: Groq for fast and reliable inference (if active key in pool)
+    if current_provider != "groq":
+        active_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if active_key:
+            print(f"  [LLM fallback] {current_provider} call failed; falling back to Groq...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True)
 
     # Priority 2: DeepSeek if configured
     if current_provider != "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
         print(f"  [LLM fallback] {current_provider} call failed; falling back to DeepSeek...")
         return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True)
 
-    # Priority 3: Google Gemini if an active key is available
+    # Priority 3: Google Gemini if an active key is available in pool
     if current_provider != "google":
         active_key, _ = _GEMINI_KEY_POOL.get_active_key()
         if active_key:
@@ -550,11 +601,47 @@ def _extract_from_failed_generation(exc: Exception, schema: Type[T]) -> T | None
     return None
 
 
+def _handle_structured_rate_limit_or_fallback(
+    llm: Any,
+    schema: Type[T],
+    messages: list,
+    max_retries: int,
+    exc: Exception,
+) -> T:
+    provider = getattr(llm, "provider", None)
+    raw_llm = getattr(llm, "_llm", llm)
+    active_key = getattr(raw_llm, "_api_key", None)
+    agent_type = getattr(llm, "_agent_type", "requirement")
+
+    if provider == "google":
+        if active_key:
+            _GEMINI_KEY_POOL.mark_exhausted(active_key)
+        next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
+        if next_key and total_active > 0:
+            print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
+            next_llm = get_llm(agent_type=agent_type, provider="google")
+            return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
+    elif provider == "groq":
+        if active_key:
+            _GROQ_KEY_POOL.mark_exhausted(active_key)
+        next_key, total_active = _GROQ_KEY_POOL.get_active_key()
+        if next_key and total_active > 0:
+            print(f"  [invoke_structured] Rotating to next Groq API key in pool ({total_active} active)...")
+            next_llm = get_llm(agent_type=agent_type, provider="groq")
+            return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
+
+    fallback_llm = _provider_fallback(llm)
+    if fallback_llm is not None:
+        print(f"  [invoke_structured] Provider {provider} rate-limited; falling back to {fallback_llm.provider}...")
+        return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
+    raise RuntimeError(_rate_limit_message(exc)) from exc
+
+
 def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2) -> T:
     """
     Try native structured output first, then ask the same model for plain JSON.
     The JSON path supports models that do not implement tool calling.
-    Handles automatic rotation across Gemini key pool and graceful provider fallback.
+    Handles automatic rotation across Gemini key pool, Groq key pool, and graceful provider fallback.
     """
     last_err = None
     schema_hint = _json_schema_hint(schema)
@@ -582,20 +669,7 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2
                 raise
             except Exception as exc:
                 if _is_rate_limit_error(exc):
-                    if getattr(llm, "provider", None) == "google":
-                        active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
-                        if active_key:
-                            _GEMINI_KEY_POOL.mark_exhausted(active_key)
-                        next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
-                        if next_key and total_active > 0:
-                            print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
-                            next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
-                            return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
-                    fallback_llm = _provider_fallback(llm)
-                    if fallback_llm is not None:
-                        print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
-                        return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
-                    raise RuntimeError(_rate_limit_message(exc)) from exc
+                    return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
                 salvaged = _extract_from_failed_generation(exc, schema)
                 if salvaged is not None:
                     return salvaged
@@ -603,20 +677,7 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2
                 print(f"  [invoke_structured] native attempt {attempt + 1}/{max_retries} failed: {exc}")
     except Exception as exc:
         if _is_rate_limit_error(exc):
-            if getattr(llm, "provider", None) == "google":
-                active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
-                if active_key:
-                    _GEMINI_KEY_POOL.mark_exhausted(active_key)
-                next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
-                if next_key and total_active > 0:
-                    print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
-                    next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
-                    return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
-            fallback_llm = _provider_fallback(llm)
-            if fallback_llm is not None:
-                print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
-                return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
-            raise RuntimeError(_rate_limit_message(exc)) from exc
+            return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
         salvaged = _extract_from_failed_generation(exc, schema)
         if salvaged is not None:
             return salvaged
@@ -631,20 +692,7 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2
             return schema.model_validate(_extract_json_from_text(text))
         except Exception as exc:
             if _is_rate_limit_error(exc):
-                if getattr(llm, "provider", None) == "google":
-                    active_key = getattr(getattr(llm, "_llm", None), "_api_key", None)
-                    if active_key:
-                        _GEMINI_KEY_POOL.mark_exhausted(active_key)
-                    next_key, total_active = _GEMINI_KEY_POOL.get_active_key()
-                    if next_key and total_active > 0:
-                        print(f"  [invoke_structured] Rotating to next Gemini API key in pool ({total_active} active)...")
-                        next_llm = get_llm(agent_type=getattr(llm, "_agent_type", "requirement"), provider="google")
-                        return invoke_structured(next_llm, schema, messages, max_retries=max_retries)
-                fallback_llm = _provider_fallback(llm)
-                if fallback_llm is not None:
-                    print(f"  [invoke_structured] Provider rate-limited; falling back to {fallback_llm.provider}...")
-                    return invoke_structured(fallback_llm, schema, messages, max_retries=max_retries)
-                raise RuntimeError(_rate_limit_message(exc)) from exc
+                return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
             last_err = exc
             print(f"  [invoke_structured] JSON fallback attempt {attempt + 1}/{max_retries} failed: {exc}")
 
