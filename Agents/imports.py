@@ -213,11 +213,12 @@ class _TrackedRunnable:
 
 
 class _TrackedLLM:
-    def __init__(self, llm: Any, agent_type: str, provider: str = "google", is_fallback: bool = False):
+    def __init__(self, llm: Any, agent_type: str, provider: str = "google", is_fallback: bool = False, fallback_depth: int = 0):
         self._llm = llm
         self._agent_type = agent_type
         self.provider = provider
-        self.is_fallback = is_fallback
+        self.is_fallback = is_fallback or (fallback_depth > 0)
+        self.fallback_depth = fallback_depth
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
         _log_request(
@@ -271,50 +272,41 @@ class _TrackedLLM:
 
 
 def _resolve_agent_provider(agent_type: str) -> str:
-    """Determine preferred provider for an agent type based on environment config and user preference."""
+    """
+    Determine preferred provider for an agent type based on user priority:
+    - Code Agent: DeepSeek (primary) -> Groq -> Google
+    - Non-coding Agents (Requirement, Design, Test, Review, Docs): Groq (primary) -> Google (secondary) -> DeepSeek (third)
+    """
     # Check explicit per-agent environment override:
-    # e.g. PROVIDER_CODE=deepseek, PROVIDER_DOCUMENTATION=google, PROVIDER_REVIEW=google
     env_override = os.environ.get(f"PROVIDER_{agent_type.upper()}")
     if env_override:
         return env_override.lower().strip()
 
-    # If the user explicitly configured deepseek as the global provider, use deepseek across all agents!
-    if DEFAULT_PROVIDER == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
-        return "deepseek"
-
-    # Code agent defaults to DeepSeek when key exists
+    # Code agent: primary is DeepSeek
     if agent_type == "code":
         if os.environ.get("DEEPSEEK_API_KEY"):
             return "deepseek"
         groq_key, _ = _GROQ_KEY_POOL.get_active_key()
         if groq_key:
             return "groq"
-
-    # Simple tasks: Documentation, Review prefer Google Gemini if keys available
-    if agent_type in ("documentation", "review"):
         active_key, _ = _GEMINI_KEY_POOL.get_active_key()
         if active_key:
             return "google"
-        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
-        if groq_key:
-            return "groq"
 
-    # Requirement agent: prefer Google Gemini if active key available, else Groq
-    if agent_type == "requirement":
-        active_key, _ = _GEMINI_KEY_POOL.get_active_key()
-        if active_key:
-            return "google"
-        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
-        if groq_key:
-            return "groq"
+    # Non-coding agents:
+    # 1. Primary Priority: Groq (via 3-key pool)
+    groq_key, _ = _GROQ_KEY_POOL.get_active_key()
+    if groq_key:
+        return "groq"
 
-    # Design and Test: prefer Groq (or DeepSeek) for fast execution
-    if agent_type in ("design", "test"):
-        groq_key, _ = _GROQ_KEY_POOL.get_active_key()
-        if groq_key:
-            return "groq"
-        if os.environ.get("DEEPSEEK_API_KEY"):
-            return "deepseek"
+    # 2. Secondary Priority: Google Gemini (via 4-key pool)
+    active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+    if active_key:
+        return "google"
+
+    # 3. Third Priority: DeepSeek
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "deepseek"
 
     return DEFAULT_PROVIDER
 
@@ -324,11 +316,12 @@ def get_llm(
     max_tokens: int = 4000,
     provider: Literal["google", "ollama", "groq", "deepseek"] | None = None,
     is_fallback: bool = False,
+    fallback_depth: int = 0,
 ):
     """
     Build a tracked LLM with per-agent role routing and fallback resilience.
     - Code Agent defaults to DeepSeek (using DEEPSEEK_CODE_MODEL) when configured.
-    - Simple tasks (review, documentation, requirements) default to Google Gemini with multi-key pool rotation.
+    - Simple tasks (review, documentation, requirements) default to Groq with Google & DeepSeek fallback.
     - Groq provides ultra-fast generation and multi-key pool fallback.
     """
     if provider is None:
@@ -342,7 +335,7 @@ def get_llm(
             groq_key, _ = _GROQ_KEY_POOL.get_active_key()
             if groq_key and not is_fallback:
                 print("  [LLM] DEEPSEEK_API_KEY not configured; falling back to Groq.")
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True, fallback_depth=fallback_depth + 1)
             raise RuntimeError(
                 "DEEPSEEK_API_KEY is required in your .env file to use DeepSeek models. "
                 "Get an API key from https://platform.deepseek.com"
@@ -351,7 +344,7 @@ def get_llm(
             from langchain_openai import ChatOpenAI
         except ImportError as exc:
             print(f"  [LLM] langchain_openai missing ({exc}); falling back to Groq.")
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=is_fallback)
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=is_fallback, fallback_depth=fallback_depth + 1)
 
         if agent_type == "code":
             selected_model = _RUNTIME_MODELS.get(agent_type) or DEEPSEEK_CODE_MODEL
@@ -369,17 +362,17 @@ def get_llm(
             base_url=DEEPSEEK_BASE_URL,
             max_tokens=max_tokens,
             temperature=0,
-        ), agent_type, provider="deepseek", is_fallback=is_fallback)
+        ), agent_type, provider="deepseek", is_fallback=is_fallback or (fallback_depth > 0), fallback_depth=fallback_depth)
 
     if selected_provider == "groq":
         groq_key, total_active = _GROQ_KEY_POOL.get_active_key()
         if not groq_key:
-            print("  [LLM] No active Groq keys in pool (all exhausted or none configured); falling back to DeepSeek or Google.")
-            if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True)
+            print("  [LLM] No active Groq keys in pool (all exhausted or none configured); falling back to Google or DeepSeek.")
             active_gkey, _ = _GEMINI_KEY_POOL.get_active_key()
             if active_gkey and not is_fallback:
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=True)
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=True, fallback_depth=fallback_depth + 1)
+            if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True, fallback_depth=fallback_depth + 1)
             raise RuntimeError(
                 "GROQ_API_KEY is required in your .env file to use Groq models. "
                 "Get a free API key from https://console.groq.com"
@@ -388,7 +381,7 @@ def get_llm(
             from langchain_groq import ChatGroq
         except ImportError as exc:
             print(f"  [LLM] langchain_groq missing ({exc}); falling back to Google Gemini.")
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=is_fallback)
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="google", is_fallback=is_fallback, fallback_depth=fallback_depth + 1)
 
         selected_model = _RUNTIME_MODELS.get(agent_type) or (GROQ_CODE_MODEL if agent_type == "code" else GROQ_MODEL)
         usage = _TOKEN_USAGE.setdefault(agent_type, {
@@ -403,7 +396,7 @@ def get_llm(
             temperature=0,
         )
         setattr(groq_llm, "_api_key", groq_key)
-        return _TrackedLLM(groq_llm, agent_type, provider="groq", is_fallback=is_fallback)
+        return _TrackedLLM(groq_llm, agent_type, provider="groq", is_fallback=is_fallback or (fallback_depth > 0), fallback_depth=fallback_depth)
 
     if selected_provider == "google":
         key, total_active = _GEMINI_KEY_POOL.get_active_key()
@@ -411,9 +404,9 @@ def get_llm(
             print("  [LLM] No active Google Gemini keys in pool (all exhausted or none configured); falling back to Groq / DeepSeek.")
             groq_key, _ = _GROQ_KEY_POOL.get_active_key()
             if groq_key and not is_fallback:
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True)
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="groq", is_fallback=True, fallback_depth=fallback_depth + 1)
             if os.environ.get("DEEPSEEK_API_KEY") and not is_fallback:
-                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True)
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens, provider="deepseek", is_fallback=True, fallback_depth=fallback_depth + 1)
             raise RuntimeError(
                 "GEMINI_API_KEY or GOOGLE_API_KEY is required in your .env file to use Google models. "
                 "Get a free Gemini API key from https://aistudio.google.com/app/apikey"
@@ -430,9 +423,10 @@ def get_llm(
             temperature=0,
             max_output_tokens=max_tokens,
             max_retries=1,
+            timeout=30.0,
         )
         setattr(google_llm, "_api_key", key)
-        return _TrackedLLM(google_llm, agent_type, provider="google", is_fallback=is_fallback)
+        return _TrackedLLM(google_llm, agent_type, provider="google", is_fallback=is_fallback or (fallback_depth > 0), fallback_depth=fallback_depth)
 
     if selected_provider == "ollama":
         if agent_type in _ALL_AGENTS:
@@ -448,7 +442,7 @@ def get_llm(
                 base_url=OLLAMA_BASE_URL,
                 num_predict=max_tokens,
                 num_ctx=num_ctx,
-            ), agent_type, provider="ollama", is_fallback=is_fallback)
+            ), agent_type, provider="ollama", is_fallback=is_fallback or (fallback_depth > 0), fallback_depth=fallback_depth)
 
     raise ValueError(
         f"Unsupported provider '{selected_provider}' for agent '{agent_type}'. "
@@ -457,32 +451,54 @@ def get_llm(
 
 
 def _provider_fallback(llm: Any, max_tokens: int | None = None) -> Any:
-    """Fallback to alternative provider if active provider fails."""
-    # Prevent infinite fallback loops
-    if getattr(llm, "is_fallback", False):
+    """
+    Fallback to alternative provider if active provider fails.
+    Priorities:
+    - Code Agent: Groq -> Google
+    - Non-coding Agents: Google (secondary) -> DeepSeek (third)
+    """
+    # Allow up to 2 fallbacks in succession (e.g. Groq -> Google -> DeepSeek)
+    current_depth = int(getattr(llm, "fallback_depth", 0))
+    if current_depth >= 2:
         return None
+    next_depth = current_depth + 1
 
     current_provider = getattr(llm, "provider", None)
     agent_type = getattr(llm, "_agent_type", "code")
 
-    # Priority 1: Groq for fast and reliable inference (if active key in pool)
-    if current_provider != "groq":
-        active_key, _ = _GROQ_KEY_POOL.get_active_key()
-        if active_key:
-            print(f"  [LLM fallback] {current_provider} call failed; falling back to Groq...")
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True)
+    # Code agent priority: Groq first, then Google
+    if agent_type == "code":
+        if current_provider != "groq":
+            active_key, _ = _GROQ_KEY_POOL.get_active_key()
+            if active_key:
+                print(f"  [LLM fallback] Code agent {current_provider} failed; falling back to Groq (depth {next_depth})...")
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True, fallback_depth=next_depth)
+        if current_provider != "google":
+            active_key, _ = _GEMINI_KEY_POOL.get_active_key()
+            if active_key:
+                print(f"  [LLM fallback] Code agent {current_provider} failed; falling back to Google Gemini (depth {next_depth})...")
+                return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
+        return None
 
-    # Priority 2: DeepSeek if configured
-    if current_provider != "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
-        print(f"  [LLM fallback] {current_provider} call failed; falling back to DeepSeek...")
-        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True)
-
-    # Priority 3: Google Gemini if an active key is available in pool
+    # Non-coding agents:
+    # 1. Secondary Priority: Google Gemini (if current was Groq)
     if current_provider != "google":
         active_key, _ = _GEMINI_KEY_POOL.get_active_key()
         if active_key:
-            print(f"  [LLM fallback] {current_provider} call failed; falling back to Google Gemini...")
-            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True)
+            print(f"  [LLM fallback] {current_provider} failed; falling back to Google Gemini (secondary, depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="google", is_fallback=True, fallback_depth=next_depth)
+
+    # 2. Third Priority: DeepSeek (if Google also failed or unavailable)
+    if current_provider != "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
+        print(f"  [LLM fallback] {current_provider} failed; falling back to DeepSeek (third, depth {next_depth})...")
+        return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="deepseek", is_fallback=True, fallback_depth=next_depth)
+
+    # If DeepSeek was the one that somehow failed, fall back to Groq
+    if current_provider != "groq":
+        active_key, _ = _GROQ_KEY_POOL.get_active_key()
+        if active_key:
+            print(f"  [LLM fallback] {current_provider} failed; falling back to Groq (depth {next_depth})...")
+            return get_llm(agent_type=agent_type, max_tokens=max_tokens or 4000, provider="groq", is_fallback=True, fallback_depth=next_depth)
 
     return None
 
@@ -512,8 +528,23 @@ def _json_schema_hint(schema: Type[BaseModel]) -> str:
         return str(schema)
 
 
-def _extract_json_from_text(text: str) -> dict:
-    """Extract the first JSON object from raw model text."""
+def _extract_json_from_text(text: Any) -> dict:
+    """Extract the first JSON object from raw model text, handling strings, lists, or structured parts."""
+    if isinstance(text, list):
+        parts = []
+        for item in text:
+            if isinstance(item, dict) and "text" in item:
+                parts.append(str(item["text"]))
+            elif hasattr(item, "text"):
+                parts.append(str(item.text))
+            elif hasattr(item, "content"):
+                parts.append(str(item.content))
+            else:
+                parts.append(str(item))
+        text = "\n".join(parts)
+    elif not isinstance(text, str):
+        text = str(text)
+
     # Direct parse
     try:
         return json.loads(text)
@@ -537,17 +568,21 @@ def _extract_json_from_text(text: str) -> dict:
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
-    """Identify provider or model-pool rate limits before retrying needlessly."""
+    """Identify provider quota, rate limits, or transient unavailability (503) to trigger immediate rotation/fallback."""
     status_code = getattr(exc, "status_code", None)
     details = str(exc).lower()
     return (
-        status_code == 429
+        status_code in (429, 503, 502, 504)
         or "429" in details
+        or "503" in details
+        or "unavailable" in details
+        or "high demand" in details
         or "too many requests" in details
         or "rate-limited" in details
         or "rate_limit" in details
         or "resource_exhausted" in details
         or "quota" in details
+        or "overloaded" in details
     )
 
 
