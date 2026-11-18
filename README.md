@@ -1,480 +1,348 @@
-# IdeaToProduct
+# IdeaToProduct: Autonomous Agentic SDLC Studio
 
-# Hackathon-to-Product Studio Agent
-
-An agentic AI software engineering system that transforms a raw product idea into a validated, designed, implemented, tested, reviewed, documented, and release-ready software project.
-
-The system models a structured software development workflow using specialized AI agents, external tools, persistent artifacts, project memory, and governance controls.
+> An end-to-end agentic software development system that transforms natural-language product ideas into validated, designed, implemented, tested, reviewed, documented, and release-ready software repositories.
 
 ---
 
-## Overview
+## Table of Contents
+1. [Overview & Executive Summary](#1-overview--executive-summary)
+2. [High-Level Architecture](#2-high-level-architecture)
+3. [Agentic Workflow & Pipeline Stages](#3-agentic-workflow--pipeline-stages)
+4. [Multi-Model Provider Routing & Key Pools](#4-multi-model-provider-routing--key-pools)
+5. [Docker Sandboxing & Test Isolation](#5-docker-sandboxing--test-isolation)
+6. [Quality Gate, Governance & Automated Rework](#6-quality-gate-governance--automated-rework)
+7. [Agent Specifications & Skill Framework](#7-agent-specifications--skill-framework)
+8. [Data Models & State Schema](#8-data-models--state-schema)
+9. [Integration History & Engineering Notes](#9-integration-history--engineering-notes)
+10. [Setup & Quick Start](#10-setup--quick-start)
+11. [Repository Structure](#11-repository-structure)
+12. [Development Roadmap](#12-development-roadmap)
 
-Given a raw software idea, the system coordinates a multi-stage agentic workflow:
+---
+
+## 1. Overview & Executive Summary
+
+Given a raw software concept, **IdeaToProduct** coordinates a multi-stage team of specialized AI agents. Unlike standard single-prompt code generators, IdeaToProduct treats software engineering as a structured, traceable lifecycle:
 
 ```text
 Raw Idea
-   |
-   v
-Requirement
-   |
-   v
-Design
-   |
-   v
-Code
-   |
-   v
-Test
-   |
-   v
-Review
-   |
-   +---- Reject ----> Rework
-   |
-   +---- Approve
-           |
-           v
-         Docs
-           |
-           v
-        Release
+   │
+   ▼
+[1. Requirements Agent] ── Ambiguous? ──► [Clarification Prompt] ──► User Input
+   │
+   ▼
+[2. Design Agent]
+   │
+   ▼
+[3. Code Agent] ◄─────────────────────────────────────────────┐
+   │ (Layered: Models → API → Frontend)                        │ Rework Loop
+   ▼                                                          │ (Max 3 attempts)
+[4. Test Agent] ──► Isolated Docker Container (pytest)         │
+   │                                                          │
+   ▼                                                          │
+[5. Review Agent] ── Quality Gate (Tests Pass & FRs Met?) ────┘
+   │
+   ├─► Rejected ──► Passes stack traces & defects to Code Agent
+   │
+   └─► Approved (Score >= 7)
+         │
+         ▼
+[6. Documentation Agent] ──► Synthesizes 5 markdown docs + JSON specs
+         │
+         ▼
+[7. Release Agent] ───────► Local package & optional GitHub release
 ```
 
-Each stage consumes the output of the preceding stage and produces a versioned artifact.
-
-The system is designed around two core principles:
-
-1. **Artifact traceability** — outputs from each stage are preserved rather than silently overwritten.
-2. **Governed progression** — downstream stages are allowed to execute only when their prerequisites are satisfied.
-
----
-
-## Problem
-
-Current AI coding systems can generate code from natural-language prompts, but a software project involves more than code generation.
-
-A real development workflow requires:
-
-* understanding and validating the problem
-* defining requirements
-* designing the system
-* implementing the solution
-* executing tests
-* independently reviewing the result
-* documenting the product
-* preparing a release
-
-This project explores how an agentic AI system can coordinate these activities while maintaining context, artifacts, decisions, and quality gates across the development lifecycle.
+### Core Engineering Principles
+1. **Artifact Traceability & Immutability**: Historical outputs are versioned (`v1`, `v2`) rather than overwritten.
+2. **Deterministic Governance**: Downstream execution strictly requires upstream prerequisites. Releasing requires explicit Review Agent approval.
+3. **Independent Verification**: The Test Agent generates and executes unit/integration tests independently from the Code Agent's self-assessment.
+4. **Isolated Sandboxing**: All user code and tests execute inside containerized environments, preventing system tampering and environmental drift.
 
 ---
 
-## Objectives
+## 2. High-Level Architecture
 
-The project aims to build an agentic pipeline that can:
+The studio operates with a browser-based UI, an asynchronous Python backend, and a compiled LangGraph state machine:
 
-* transform unstructured ideas into structured requirements
-* ground requirements using external evidence
-* generate an implementation-oriented system design
-* generate and modify an actual software repository
-* execute tests against generated code
-* independently evaluate the resulting software
-* enforce approval before release
-* preserve artifacts and their lineage
-* retain the rationale behind important decisions
-* support controlled rework when a stage fails review
-
----
-
-## Pipeline
-
-The system consists of seven primary stages.
-
-### 1. Requirement
-
-**Input:** Raw idea
-
-**Output:** Requirement artifact
-
-The Requirement Agent converts a vague product idea into structured user stories and requirements. The stage may also perform market validation and use external developer issue data for grounding.
-
----
-
-### 2. Design
-
-**Input:** Requirement artifact
-
-**Output:** Design artifact
-
-The Design Agent converts the requirements into an implementation-oriented system design, including architecture, components, interfaces, data models, and relevant technical decisions.
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                       Frontend UI                           │
+│   • Single-page responsive studio (HTML5 / CSS3 / ES6)      │
+│   • Live SSE / Polling stage progression & artifact viewer  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ HTTP / JSON API
+┌──────────────────────────────▼──────────────────────────────┐
+│                    Python HTTP Server                       │
+│   • Asynchronous session worker daemon                      │
+│   • Thread-safe SQLite audit & governance logger            │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ StateGraph Execution
+┌──────────────────────────────▼──────────────────────────────┐
+│                  LangGraph State Machine                    │
+│   • MemorySaver checkpointing for pause / resume            │
+│   • Conditional edge routing (quality gate & rework)        │
+└──────┬──────────┬──────────┬──────────┬──────────┬──────────┘
+       │          │          │          │          │
+┌──────▼───┐┌─────▼────┐┌────▼─────┐┌───▼────┐┌────▼─────┐
+│Requirements│Design    ││Code Agent ││Test Agent│Review/Docs│
+│  (Groq)  ││  (Groq)  ││(DeepSeek) ││ (Groq)   ││(Google)  │
+└──────────┘└──────────┘└────┬─────┘└───┬────┘└──────────┘
+                             │          │
+┌────────────────────────────▼──────────▼─────────────────────┐
+│                 Execution Sandbox (Docker)                  │
+│   • Pre-warmed image (ideatoprod-runner:python)             │
+│   • Pre-installed: FastAPI, Pytest, HTTPX, SQLAlchemy       │
+│   • 4-second sub-process isolated test execution            │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### 3. Code
+## 3. Agentic Workflow & Pipeline Stages
 
-**Input:** Design artifact
+| Stage | Primary Model | Input | Output Artifact | Key Responsibility |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Requirements** | Groq (`gpt-oss-120b`) | Raw Idea | Requirements Document | Extracts Actors, User Stories, Functional Requirements (FRs), Non-Functional Requirements (NFRs), and Acceptance Criteria (ACs). Halts for clarification if ambiguous. |
+| **2. Design** | Groq (`gpt-oss-120b`) | Requirements | System Design Document | Defines component boundaries, REST endpoints, database schemas, and architectural patterns. |
+| **3. Code** | DeepSeek (`deepseek-flash`) | Design + Requirements | Complete Source Repository | Generates production code using an adaptive layered approach (Data Models → API/Logic → UI Assets). |
+| **4. Test** | Groq (`gpt-oss-120b`) | Code + ACs | Test Suite & Results | Generates `test_verification.py` and executes tests inside an isolated Docker runner. Reports pass/fail counts and stack traces. |
+| **5. Review** | Google (`gemini-3.8-flash`) | Code + Tests + Specs | Review Audit | Acts as a strict quality gate. Evaluates functional completeness and security. Enforces failure if any automated test fails. |
+| **6. Documentation**| Google (`gemini-3.8-flash`) | All Prior Artifacts | Documentation Package | Synthesizes `README.md`, `API_REFERENCE.md`, `ARCHITECTURE.md`, `USER_GUIDE.md`, and `CHANGELOG.md`. |
+| **7. Release** | Local Runtime | Approved Project | Production Bundle | Packages source files, writes release metadata, and optionally pushes to a remote GitHub repository. |
 
-**Output:** Source repository / code artifact
+---
 
-The Code Agent implements the system described by the design. Repository scaffolding and code-generation tools are used to create and modify the project workspace.
+## 4. Multi-Model Provider Routing & Key Pools
 
-The initial implementation is generated with Ollama. If the Review Agent rejects it, the targeted code rework uses Groq instead and receives the review findings and test output. Configure `GROQ_API_KEY` in `.env`; `GROQ_CODE_MODEL` is optional and defaults to `openai/gpt-oss-120b`. Install the optional integration with:
+To eliminate rate-limiting (`HTTP 429`) and concurrency bottlenecks, IdeaToProduct implements an isolated, multi-provider model routing strategy in `Agents/imports.py`:
 
+```ini
+# Explicit Per-Agent Provider Pinning (.env)
+PROVIDER_CODE=deepseek
+PROVIDER_DOCUMENTATION=google
+PROVIDER_REVIEW=google
+PROVIDER_REQUIREMENT=groq
+PROVIDER_DESIGN=groq
+PROVIDER_TEST=groq
+```
+
+### Failover & Key Management Architecture
+- **DeepSeek Isolation**: `deepseek-flash` is strictly reserved for the Code Agent. It receives 0 requests during Requirements and Design, guaranteeing a completely cooled TPM/RPM limit when repository generation starts.
+- **Groq Multi-Key Pool**: Rotates across 3 API keys (`GROQ_API_KEY`, `GROQ_API_KEY_2`, `GROQ_API_KEY_3`) with automatic 90s temporary exhaustion penalties upon receiving a 429.
+- **Google Gemini Pool**: Rotates across 4 API keys with 60s cooldown penalties.
+- **Non-Coding Fallback**: Non-coding agents fall back strictly between Groq and Google. They are prevented from spilling over into DeepSeek's quota.
+
+---
+
+## 5. Docker Sandboxing & Test Isolation
+
+All generated software is verified in a hermetic container sandbox:
+
+### The Pre-Warmed Runner Image (`ideatoprod-runner:python`)
+- Standard wheel downloads across the Windows-WSL2 9P filesystem bridge can cause severe I/O bottlenecks.
+- To resolve this, a local base image (`ideatoprod-runner:python`) comes pre-installed with `pytest`, `fastapi`, `httpx`, `sqlalchemy`, `pydantic`, and `python-dotenv`.
+- `Agents/test_runner.py` inspects `requirements.txt` via `_needs_pip_install()`. If only standard dependencies are requested, the network `pip install` phase is skipped entirely, executing full test suites in **~4 seconds**.
+
+### Sandbox Constraints
+- Containers run with `--network none` (when packages are pre-installed) to guarantee zero external side-effects.
+- Read-only code mounts where appropriate.
+- Memory limit: `1g`.
+- Execution timeout: 35 seconds.
+
+---
+
+## 6. Quality Gate, Governance & Automated Rework
+
+### Deterministic Quality Gate
+The Review Agent enforces non-negotiable governance policies:
+1. **Automated Test Rule**: If `test_results["all_passed"] == False`, the build **must be rejected** (`approval_status = "rejected"`), and the score is capped at $\le 5/10$.
+2. **Specification Conformance**: Verifies that every FR and endpoint described in the Design stage actually exists in the code files.
+
+### The Feedback Rework Loop
+When rejected:
+1. Review defects, failed test names, and stack traces are injected into the LangGraph state.
+2. LangGraph triggers `rework_repository_single_shot` on the Code Agent.
+3. The Code Agent repairs the broken modules and updates `code_version` (`v1` $\rightarrow$ `v2`).
+4. The Test Agent re-runs the verification suite.
+5. If tests pass, Review approves (`Score >= 7`), and LangGraph unlocks Documentation and Release.
+
+---
+
+## 7. Agent Specifications & Skill Framework
+
+Every agent in the studio follows a standardized contract:
+
+```text
+Agent Structure:
+├── 1. Purpose (Clear functional scope)
+├── 2. Input Contract (Validated AgentState slice)
+├── 3. Output Schema (Pydantic BaseModel with strict validation)
+├── 4. Assigned LLM (Pinned provider and model)
+├── 5. Tools (Docker runner, Git tools, Kaggle market grounding)
+├── 6. System Prompt (Role persona and anti-hallucination rules)
+└── 7. Success Criteria (Quality gate prerequisites)
+```
+
+### Dynamic Execution Properties
+- **State & Checkpoints**: Ephemeral in-memory execution backed by LangGraph checkpoints.
+- **Self-Repair**: The Test Agent incorporates a self-repair loop: if a failure is due to a broken test fixture rather than an application bug, it auto-repairs the test file up to 3 times before declaring an application failure.
+- **Governance Checklist**:
+  - Human intervention points (Clarification and Final Release approval).
+  - SQLite audit trail in `logs/pipeline_audit.db`.
+  - Rollbacks and preservation of intermediate generation versions.
+
+---
+
+## 8. Data Models & State Schema
+
+The central state object passed through LangGraph is defined in `Agents/State_definition.py`:
+
+```python
+class AgentState(TypedDict, total=False):
+    project_id: str
+    idea: str
+    current_stage: str
+    workflow_status: str          # "running" | "failed" | "completed"
+    approval_status: str          # "approved" | "rejected" | "pending"
+    
+    # Artifact Payloads
+    requirements: dict
+    clarification: Optional[dict]
+    design: dict
+    code: dict
+    test_results: dict
+    tests: dict
+    review: dict
+    documentation: dict
+    release: dict
+    
+    # Versioning & Audit
+    code_version: int
+    test_version: int
+    review_version: int
+    documentation_version: int
+    retry_count: dict[str, int]
+    token_usage: dict[str, Any]
+    generated_project_path: str
+```
+
+---
+
+## 9. Integration History & Engineering Notes
+
+### Key Milestones & Fixes
+- **Token Usage Normalization**: Standardized token usage extraction across LangChain ChatOpenAI, ChatGroq (`response_metadata.get("token_usage")`), and ChatGoogleGenerativeAI.
+- **Windows Encoding Fix**: Enforced `utf-8` with replacement errors on all file I/O to prevent Windows `cp1252` encoding crashes.
+- **Prompt Size Optimization**: Reduced code excerpts in `DocumentationAgent.py` from 2000 to 1000 characters per file, cutting prompt size by 50% and preventing output truncation.
+- **Reasoning Model Headroom**: Configured `CODE_MAX_TOKENS=12000` and `DOCS_MAX_TOKENS=6000` to provide sufficient output headroom for reasoning models (`deepseek-flash`) that consume tokens during internal chain-of-thought.
+- **Frontend Error Synchronization**: Updated `frontend/app.js` to render failed stages with red indicators and preserve partial artifacts rather than displaying false completions.
+
+---
+
+## 10. Setup & Quick Start
+
+### Prerequisites
+- Python 3.10+
+- Docker Desktop (running)
+- API Keys: DeepSeek, Groq (1-3 keys), Google Gemini (1-4 keys)
+
+### 1. Installation
 ```bash
-pip install -r requirements-groq.txt
+git clone <repo-url> IdeaToProduct
+cd IdeaToProduct
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# Linux/macOS:
+source venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-The Test and Review Agents continue to use Ollama. If Groq is unavailable during a code retry, the failed call falls back to the configured Ollama model and logs that fallback.
+### 2. Configure Environment (`.env`)
+```ini
+LLM_PROVIDER=deepseek
+CODE_MAX_TOKENS=12000
+DOCS_MAX_TOKENS=6000
 
----
+# DeepSeek (Code Agent)
+DEEPSEEK_API_KEY=sk-your-key
+DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_CODE_MODEL=deepseek-flash
 
-### 4. Test
+# Groq Key Pool (Requirements, Design, Tests)
+GROQ_API_KEY=gsk_key1
+GROQ_API_KEY_2=gsk_key2
+GROQ_API_KEY_3=gsk_key3
+GROQ_MODEL=openai/gpt-oss-120b
 
-**Input:** Generated repository
+# Google Gemini Key Pool (Review, Documentation)
+GOOGLE_API_KEY=your-gemini-key1
+GOOGLE_API_KEY_2=your-gemini-key2
+GEMINI_MODEL=gemini-3.8-flash
 
-**Output:** Test results
-
-The Test Agent executes the generated software and evaluates it using an execution tool. Test results are based on actual execution rather than only static inspection or the Code Agent's explanation.
-
----
-
-### 5. Review
-
-**Input:** Pipeline artifacts and test results
-
-**Output:** Review artifact + approval decision
-
-The Review Agent evaluates the consistency and quality of the project across requirements, design, implementation, and testing.
-
-Review is a hard quality gate.
-
-```text
-Review
-   |
-   +---- REJECT ----> Rework
-   |
-   +---- APPROVE ---> Documentation
+# Provider Routing
+PROVIDER_CODE=deepseek
+PROVIDER_DOCUMENTATION=google
+PROVIDER_REVIEW=google
+PROVIDER_REQUIREMENT=groq
+PROVIDER_DESIGN=groq
+PROVIDER_TEST=groq
 ```
 
----
-
-### 6. Documentation
-
-**Input:** Approved project artifacts
-
-**Output:** Documentation artifact
-
-The Documentation Agent generates user-facing and project documentation based on the resulting system.
-
----
-
-### 7. Release
-
-**Input:** Review approval + final artifacts
-
-**Output:** Release artifact
-
-The Release Agent prepares release notes and a versioned release summary.
-
-Release execution is blocked unless the required review approval exists.
-
----
-
-## Agent Architecture
-
-Agents are separated from the tools they use.
-
-```text
-                    Orchestrator
-                         |
-        +----------------+----------------+
-        |                |                |
-   Requirement        Design            Code
-      Agent            Agent            Agent
-        |                |                |
-      Tools            Tools            Tools
-        |                |                |
-        +----------------+----------------+
-                         |
-                      Test Agent
-                         |
-                    Test Runner
-                         |
-                    Review Agent
-                         |
-                 Approval / Rework
-                    /         \
-                Reject       Approve
-                  |             |
-                Rework         Docs
-                                |
-                              Release
+### 3. Build Pre-Warmed Docker Image
+```bash
+# In the project root:
+docker build -t ideatoprod-runner:python -f Dockerfile.runner .
 ```
 
-The orchestrator is responsible for coordinating execution and enforcing pipeline transitions.
-
-Agents are responsible for reasoning and producing stage-specific outputs.
-
-Tools provide controlled interaction with external systems or execution environments.
-
----
-
-## Tools
-
-The initial system is designed around the following tools.
-
-### `market_check`
-
-Evaluates a product idea against available startup outcome data and returns evidence that can be used during requirement generation.
-
-### `repo_scaffold`
-
-Creates the initial repository structure from a system design specification.
-
-### `test_runner`
-
-Executes generated code/tests and returns objective execution results such as pass, fail, error, and timeout information.
-
-### GitHub MCP
-
-The Requirement stage uses GitHub through MCP to retrieve relevant issue information and ground requirement generation in real developer problem descriptions.
-
----
-
-## Grounding Data
-
-The current project specification identifies two primary sources for grounding:
-
-### Startup Success Prediction Dataset
-
-Used by the Requirement stage to support market-oriented evaluation of an idea.
-
-### GH Archive / GitHub Issue Data
-
-Used to provide realistic examples of developer-reported problems, feature requests, and issue descriptions.
-
-The grounding layer is intended to reduce reliance on purely generative assumptions during requirement formation.
-
----
-
-## Agent Skills
-
-The system uses structured skills rather than relying exclusively on unconstrained prompts.
-
-For example, the Requirement Agent follows a defined requirements-writing method that consistently converts an idea into structured user stories and requirements.
-
-Skills are intended to make agent behavior:
-
-* repeatable
-* testable
-* inspectable
-* easier to evaluate
-
----
-
-## Memory
-
-The system maintains project-level memory for important decisions and their rationale.
-
-Example:
-
-```text
-Decision:
-Remove feature X from V1
-
-Reason:
-Implementation complexity exceeds the current scope
-
-Impact:
-Design
-Code
-Documentation
-Release
+### 4. Run Studio Server
+```bash
+python server.py
 ```
-
-The objective is to preserve not only the current project state, but also the reasoning behind significant changes.
-
----
-
-## Artifact Model
-
-Every pipeline stage produces a persistent artifact.
-
-Conceptually:
-
-```text
-Artifact
-├── id
-├── project_id
-├── stage
-├── version
-├── content
-├── parent_artifact
-├── created_at
-└── metadata
-```
-
-Artifacts form a lineage:
-
-```text
-Requirement v1
-      |
-      v
-Design v1
-      |
-      v
-Code v1
-      |
-      v
-Test v1
-      |
-      v
-Review v1
-```
-
-Later revisions create new versions rather than silently replacing historical artifacts.
+Open your browser at `http://localhost:8000` to launch the IdeaToProduct studio.
 
 ---
 
-## Governance
-
-The pipeline enforces stage-transition rules.
-
-The primary governance constraint is:
-
-```text
-Release requires Review approval.
-```
-
-An unapproved project cannot proceed through the normal release path.
-
-This provides an explicit quality gate and an auditable decision point before release.
-
----
-
-## Rework
-
-A rejected project can enter a controlled rework cycle.
-
-```text
-Code
-  |
-Test
-  |
-Review
-  |
-  +---- Reject
-          |
-          v
-       Rework
-          |
-          v
-        Test
-          |
-          v
-       Review
-```
-
-The rework mechanism is intended to pass relevant failure information back to the appropriate stage while preserving previous artifacts.
-
----
-
-## Development Roadmap
-
-| Phase    | Focus                                       | Status  |
-| -------- | ------------------------------------------- | ------- |
-| Phase 0  | Project Foundation & Architecture           | Planned |
-| Phase 1  | Agent Runtime & Core Infrastructure         | Planned |
-| Phase 2  | Requirement Agent                           | Planned |
-| Phase 3  | Grounding, Market Intelligence & MCP        | Planned |
-| Phase 4  | Design Agent                                | Planned |
-| Phase 5  | Code Agent & Repository Generation          | Planned |
-| Phase 6  | Test Agent & Code Execution                 | Planned |
-| Phase 7  | Review Agent & Governance                   | Planned |
-| Phase 8  | Documentation & Release                     | Planned |
-| Phase 9  | Memory, Artifact Versioning & Rework        | Planned |
-| Phase 10 | Integration, Evaluation & Product Interface | Planned |
-
-Detailed implementation plans are maintained under `docs/`.
-
----
-
-## Repository Structure
+## 11. Repository Structure
 
 ```text
 .
-├── agents/              # Agent implementations
-├── api/                 # API layer
-├── artifacts/            # Generated project artifacts
-├── memory/              # Project memory and decisions
-├── models/              # Shared data models and schemas
-├── orchestration/       # Pipeline orchestration
-├── tools/               # Agent tools and integrations
-├── tests/               # Unit, integration and E2E tests
-├── docs/                # Architecture and engineering documentation
-├── .env.example         # Environment variable template
-├── .gitignore
-├── README.md
-└── pyproject.toml
+├── Agents/                     # Agent implementations & prompts
+│   ├── CodeAgent.py            # Layered & adaptive code generator
+│   ├── DesignAgent.py          # Architecture & schema designer
+│   ├── DocumentationAgent.py   # Technical docs synthesizer
+│   ├── ReleaseAgent.py         # Packaging & GitHub release
+│   ├── RequirementAgent.py     # FR/NFR extraction & clarification
+│   ├── ReviewAgent.py          # Quality gate auditor
+│   ├── TestAgent.py            # Test generator & self-repair loop
+│   ├── graph.py                # LangGraph pipeline definition
+│   ├── imports.py              # LLM factory, key pools & fallbacks
+│   ├── test_runner.py          # Docker test execution engine
+│   └── prompts/                # Dedicated system prompts
+├── frontend/                   # Browser UI studio
+│   ├── index.html              # Studio single-page application
+│   ├── app.js                  # SSE polling & stage renderer
+│   └── style.css               # Studio design system
+├── generated_projects/         # Runtime directory for generated apps
+├── logs/                       # SQLite pipeline audit trail
+│   └── pipeline_audit.db
+├── complete_pipeline_langgraph.py # Standalone compiled workflow script
+├── server.py                   # Main HTTP API & static file server
+├── requirements.txt            # Host Python dependencies
+└── README.md                   # Consolidated project master documentation
 ```
 
 ---
 
-## Engineering Principles
+## 12. Development Roadmap
 
-### Separation of concerns
-
-Agents, tools, orchestration, memory, and artifacts are separate components.
-
-### Explicit contracts
-
-Agent inputs, outputs, tools, and artifacts use defined schemas rather than relying on unstructured text wherever possible.
-
-### Artifact immutability
-
-Historical stage outputs are preserved and versioned.
-
-### Independent testing
-
-The Test stage evaluates executable output independently from the Code Agent's reasoning.
-
-### Governed execution
-
-Certain transitions require explicit conditions, particularly the Review → Release transition.
-
-### Observability
-
-Agent executions, tool calls, failures, decisions, and pipeline transitions should be traceable.
-
-### Reproducibility
-
-The same input and pipeline configuration should produce inspectable intermediate artifacts that allow the result to be evaluated.
-
----
-
-## Testing Strategy
-
-Testing will be performed at three levels.
-
-### Unit Tests
-
-Individual agents, tools, schemas, and state-transition logic.
-
-### Integration Tests
-
-Interactions between agents, tools, artifacts, and the orchestrator.
-
-### End-to-End Tests
-
-Execution of the complete pipeline from a raw idea through release.
-
-Particular attention will be given to governance cases such as:
-
-```text
-Rejected Review -> Release must be blocked
-Missing Artifact -> Downstream stage must not execute
-Failed Test -> Review receives failure information
-Rework -> Previous artifacts remain preserved
-```
-
----
+- [x] Multi-key pool rotation for Groq and Gemini.
+- [x] Isolated Docker test execution with pre-warmed image caching.
+- [x] Adaptive layered code generation (Models → API → Frontend).
+- [x] Quality gate review loop with automated rework.
+- [x] Full-lifecycle documentation synthesis (`README`, `API`, `Architecture`, `User Guide`, `Changelog`).
+- [ ] Multi-user session persistence with PostgreSQL backend.
+- [ ] Interactive live in-browser preview of generated frontend apps.
+- [ ] Additional language runner images (Node.js/TypeScript, Go, Rust).

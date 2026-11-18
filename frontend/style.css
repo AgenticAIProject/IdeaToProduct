@@ -667,6 +667,8 @@ a { color: inherit; text-decoration: none; }
 }
 .sb-stage-item.done { color: var(--text-dim); }
 .sb-stage-item.done .sb-stage-dot { background: var(--green); }
+.sb-stage-item.failed { color: var(--text-dim); }
+.sb-stage-item.failed .sb-stage-dot { background: var(--red) !important; }
 
 .sb-stage-dot {
   width: 5px; height: 5px; border-radius: 50%;

@@ -420,6 +420,17 @@ function handlePollResult(data) {
   // Pipeline stopped: stop polling.
   if (data.status === 'error') {
     clearInterval(State.pollTimer);
+    State.status = 'error';
+    setStopControl(false);
+    setNavPipelineStatus('error');
+    setSbStatus('error');
+    const stage = normaliseStage(data.stage || 'code');
+    updateSidebarStagesOnError(stage);
+    if (data.result) {
+      State.pipelineData = data.result;
+      populateLiveViews(data.result);
+      renderOverview(data.result);
+    }
     showPipelineError(data.error || 'Unknown error.');
     addActivity('System', 'Error', data.error || 'Pipeline stopped');
     return;
@@ -790,9 +801,22 @@ function updateSidebarStages(lastStage, result) {
   STAGE_DEFS.forEach((def, i) => {
     const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
     if (!el) return;
-    el.classList.remove('running');
+    el.classList.remove('running', 'failed');
     if (i < idx) el.classList.add('done');
     else if (i === idx) el.classList.add('done'); // last completed = done on pipeline finish
+  });
+}
+
+function updateSidebarStagesOnError(failedStage) {
+  const mappedStage = normaliseStage(failedStage);
+  const idx = STAGE_DEFS.findIndex(s => s.id === mappedStage);
+
+  STAGE_DEFS.forEach((def, i) => {
+    const el = document.querySelector(`.sb-stage-item[data-stage="${def.id}"]`);
+    if (!el) return;
+    el.classList.remove('running', 'failed', 'done');
+    if (i < idx) el.classList.add('done');
+    else if (i === idx) el.classList.add('failed');
   });
 }
 
@@ -1074,6 +1098,9 @@ function renderOverview(data) {
   let pipeline;
   if (State.isLive && State.pipelineData) {
     const currentStage = normaliseStage((State.stage || State.pipelineData.current_stage || ''));
+    const isError = State.status === 'error';
+    const errIdx = isError ? STAGE_DEFS.findIndex(s => s.id === currentStage) : -1;
+
     const stageResults = {
       requirement: State.pipelineData.requirements,
       design: State.pipelineData.design,
@@ -1082,12 +1109,23 @@ function renderOverview(data) {
       review: State.pipelineData.review,
       documentation: State.pipelineData.documentation,
     };
-    pipeline = STAGE_DEFS.map(def => ({
-      ...def,
-      status: stageResults[def.id] && Object.keys(stageResults[def.id]).length
-        ? 'done'
-        : def.id === currentStage ? 'running' : 'queued',
-    }));
+    pipeline = STAGE_DEFS.map((def, i) => {
+      let status = 'queued';
+      if (isError) {
+        if (errIdx >= 0 && i < errIdx) {
+          status = stageResults[def.id] && Object.keys(stageResults[def.id]).length ? 'done' : 'queued';
+        } else if (i === errIdx) {
+          status = 'failed';
+        } else {
+          status = 'queued';
+        }
+      } else {
+        status = stageResults[def.id] && Object.keys(stageResults[def.id]).length
+          ? 'done'
+          : def.id === currentStage ? 'running' : 'queued';
+      }
+      return { ...def, status };
+    });
   } else if (!State.isLive && !isOverviewOnly && mock.pipeline) {
     pipeline = mock.pipeline.map(p => ({ ...p }));
   } else {
