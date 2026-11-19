@@ -424,7 +424,7 @@ def get_llm(
             temperature=0,
             max_output_tokens=max_tokens,
             max_retries=1,
-            timeout=30.0,
+            timeout=120.0,
         )
         setattr(google_llm, "_api_key", key)
         return _TrackedLLM(google_llm, agent_type, provider="google", is_fallback=is_fallback or (fallback_depth > 0), fallback_depth=fallback_depth)
@@ -569,13 +569,17 @@ def _extract_json_from_text(text: Any) -> dict:
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
-    """Identify provider quota, rate limits, or transient unavailability (503) to trigger immediate rotation/fallback."""
+    """Identify provider quota, rate limits, or transient unavailability (503/504) to trigger immediate rotation/fallback."""
     status_code = getattr(exc, "status_code", None)
     details = str(exc).lower()
     return (
         status_code in (429, 503, 502, 504)
         or "429" in details
         or "503" in details
+        or "504" in details
+        or "deadline" in details
+        or "timed out" in details
+        or "timeout" in details
         or "unavailable" in details
         or "high demand" in details
         or "too many requests" in details
@@ -701,36 +705,40 @@ def invoke_structured(llm, schema: Type[T], messages: list, max_retries: int = 2
     fallback_messages = [fallback_instruction] + list(messages)
 
     model_name = getattr(llm, "model", "") or getattr(llm, "model_name", "llm")
-    print(f"  [invoke_structured] Trying model: {model_name}")
+    provider = getattr(llm, "provider", None)
+    print(f"  [invoke_structured] Trying model: {model_name} (provider: {provider})")
 
-    try:
-        structured_llm = llm.with_structured_output(schema)
-        for attempt in range(max_retries):
-            try:
-                result: Any = structured_llm.invoke(messages)
-                if isinstance(result, schema):
-                    return result
-                if isinstance(result, dict):
-                    return schema.model_validate(result)
-                last_err = ValueError("Structured output was empty or invalid.")
-            except TypeError:
-                raise
-            except Exception as exc:
-                if _is_rate_limit_error(exc):
-                    return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
-                salvaged = _extract_from_failed_generation(exc, schema)
-                if salvaged is not None:
-                    return salvaged
-                last_err = exc
-                print(f"  [invoke_structured] native attempt {attempt + 1}/{max_retries} failed: {exc}")
-    except Exception as exc:
-        if _is_rate_limit_error(exc):
-            return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
-        salvaged = _extract_from_failed_generation(exc, schema)
-        if salvaged is not None:
-            return salvaged
-        last_err = exc
-        print(f"  [invoke_structured] native strategy unavailable: {exc}")
+    # DeepSeek reasoning models (deepseek-flash / deepseek-reasoner) do not support
+    # OpenAI function/tool calling; route directly to JSON prompt mode for immediate success
+    if provider != "deepseek":
+        try:
+            structured_llm = llm.with_structured_output(schema)
+            for attempt in range(max_retries):
+                try:
+                    result: Any = structured_llm.invoke(messages)
+                    if isinstance(result, schema):
+                        return result
+                    if isinstance(result, dict):
+                        return schema.model_validate(result)
+                    last_err = ValueError("Structured output was empty or invalid.")
+                except TypeError:
+                    raise
+                except Exception as exc:
+                    if _is_rate_limit_error(exc):
+                        return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
+                    salvaged = _extract_from_failed_generation(exc, schema)
+                    if salvaged is not None:
+                        return salvaged
+                    last_err = exc
+                    print(f"  [invoke_structured] native attempt {attempt + 1}/{max_retries} failed: {exc}")
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                return _handle_structured_rate_limit_or_fallback(llm, schema, messages, max_retries, exc)
+            salvaged = _extract_from_failed_generation(exc, schema)
+            if salvaged is not None:
+                return salvaged
+            last_err = exc
+            print(f"  [invoke_structured] native strategy unavailable: {exc}")
 
     print(f"  [invoke_structured] Falling back to JSON prompt mode for {schema.__name__}...")
     for attempt in range(max_retries):
