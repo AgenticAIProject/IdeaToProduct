@@ -146,7 +146,9 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
     print("  [Grounding] Querying GH Archive for real developer issue patterns...")
     grounding_result = fetch_github_grounding.invoke({"idea": state["idea"]})
     github_data = grounding_result["github_data"]
-    issues_text  = grounding_result["issues_text"]
+    issues_text = grounding_result["issues_text"]
+    if len(issues_text) > 6000:
+        issues_text = issues_text[:6000].rsplit("\n", 1)[0] + "\n[Grounding context truncated]"
 
     grounding_prompt = imports.SystemMessage(content=f"""
 Empirical Developer Issues & Edge Cases (GH Archive):
@@ -195,8 +197,12 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
         _ensure_constraint("The application must be implemented in C++ (C++17 standard).")
     elif (re.search(r"\b(?:in\s+c\b|c\s+language|using\s+c\b|c\s+programming|\bc\s+code\b)", user_idea_lower) or re.search(r"(?<![a-z0-9_])c(?![a-z0-9_+#])", user_idea_lower)) and not any(k in existing_constraints_text for k in ("in c", "c language", "c11")):
         _ensure_constraint("The application must be implemented in C language (C11 standard).")
-    elif "python" in user_idea_lower and "python" not in existing_constraints_text:
-        _ensure_constraint("The application must be implemented in Python.")
+    elif "java" in user_idea_lower and "java" not in existing_constraints_text:
+        _ensure_constraint("The application must be implemented in Java.")
+    elif any(name in user_idea_lower for name in ("python", "go", "rust", "ruby", "php", "kotlin", "swift", "c#", "typescript")):
+        supported = "The application must be implemented using C, C++, Java, or HTML/CSS/JavaScript."
+        if supported.lower() not in existing_constraints_text:
+            _ensure_constraint(supported)
 
     # ---------------------------------------------------------
     # 8. Return requirements with grounding evidence

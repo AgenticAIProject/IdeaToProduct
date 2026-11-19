@@ -93,16 +93,45 @@ def _log_request(agent_type: str, provider: str, model: str, args: tuple, kwargs
 
 
 class _TrackedRunnable:
-    def __init__(self, runnable: Any, agent_type: str, provider: str, model: str, output_limit: int):
+    def __init__(
+        self,
+        runnable: Any,
+        agent_type: str,
+        provider: str,
+        model: str,
+        output_limit: int,
+        structured_args: tuple = (),
+        structured_kwargs: dict | None = None,
+    ):
         self._runnable = runnable
         self._agent_type = agent_type
         self._provider = provider
         self._model = model
         self._output_limit = output_limit
+        self._structured_args = structured_args
+        self._structured_kwargs = structured_kwargs or {}
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
         _log_request(self._agent_type, self._provider, self._model, args, kwargs, self._output_limit)
-        response = self._runnable.invoke(*args, **kwargs)
+        try:
+            response = self._runnable.invoke(*args, **kwargs)
+        except Exception as exc:
+            if self._provider == "ollama":
+                raise
+            print(
+                f"  [LLM] Structured Groq call failed ({exc}); "
+                "falling back to Ollama."
+            )
+            fallback_llm = get_llm(
+                agent_type=self._agent_type,
+                max_tokens=self._output_limit,
+                provider="ollama",
+            )
+            fallback_runnable = fallback_llm.with_structured_output(
+                *self._structured_args,
+                **self._structured_kwargs,
+            )
+            response = fallback_runnable.invoke(*args, **kwargs)
         if isinstance(response, dict) and response.get("raw") is not None:
             _record_token_usage(self._agent_type, response["raw"])
             return response.get("parsed")
@@ -127,11 +156,14 @@ class _TrackedLLM:
         )
         try:
             response = self._llm.invoke(*args, **kwargs)
-        except Exception:
+        except Exception as exc:
             fallback_llm = _ollama_fallback(self)
             if fallback_llm is None:
                 raise
-            print("  [LLM] Provider call failed; falling back to Ollama.")
+            print(
+                f"  [LLM] {self.provider} call failed "
+                f"({type(exc).__name__}: {exc}); falling back to Ollama."
+            )
             return fallback_llm.invoke(*args, **kwargs)
         _record_token_usage(self._agent_type, response)
         return response
@@ -144,6 +176,8 @@ class _TrackedLLM:
             self.provider,
             getattr(self._llm, "model", None) or getattr(self._llm, "model_name", "llm"),
             int(getattr(self._llm, "max_tokens", None) or getattr(self._llm, "num_predict", 0) or 0),
+            structured_args=args,
+            structured_kwargs=kwargs,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -195,7 +229,7 @@ def get_llm(
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         })
         usage["model"] = selected_model
-        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
         return _TrackedLLM(ChatOllama(
             model=selected_model,
             base_url=OLLAMA_BASE_URL,

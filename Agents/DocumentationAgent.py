@@ -92,8 +92,9 @@ Description: {f.get('description', '')}
 Exports: {f.get('exports', [])}
 Requirement IDs: {f.get('requirement_ids', [])}
 Source:
-{(f.get('content') or '')[:12000]}"""
-            for f in code_files if isinstance(f, dict)
+{(f.get('content') or '')[:5000]}"""
+            for f in (code_files if isinstance(code_files, list) else [])[:8]
+            if isinstance(f, dict)
         )
     elif isinstance(code_files, dict):
         code_summary = "\n".join(

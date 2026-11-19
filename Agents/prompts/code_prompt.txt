@@ -51,7 +51,7 @@ QUALITY
 - Implement the smallest solution that satisfies the approved V1 scope. Aim for 3 to 8 source files.
 
 CRITICAL RUNTIME HYGIENE:
-- You must explicitly import every core Python standard library module you reference. For example, if you use `os.environ`, you MUST include `import os` at the top of the file. If you use `sqlite3`, you MUST include `import sqlite3`. 
+- Supported generated languages are C, C++, Java, JavaScript, HTML, and CSS. Do not generate Python or other unsupported languages.
 - Never inject query parameters or filtering notation directly into framework route decorators. Use function method signatures with type descriptors instead (e.g., `@app.get("/news")` with a parameter `category: Optional[str] = None`).
 
 Root Route Hygiene: Always implement a lightweight welcome landing route at the absolute path root (@app.get("/")). 
@@ -59,7 +59,8 @@ This route should return a basic JSON status payload detailing system availabili
  Never leave the absolute root unmapped to avoid confusing the user with clean execution 404 Not Found messages.
 
 JAVASCRIPT TESTABILITY (Frontend/Node projects):
-- In every JS logic/state module (e.g. logic.js, store.js, calculator.js), you MUST export a `_resetState()` function that resets ALL module-level variables to their initial empty values. This is required for test isolation.
-- JS module exports MUST use live getters for arrays and objects: `get goals() { return goals; }` NOT `goals: goals` (a snapshot copy). Without live getters, tests always see stale data.
-- Return a boolean from every mutating function (setGoal, checkOffGoal, editGoal, deleteGoal) so tests can assert success/failure without inspecting error messages.
-- For "already done today" type constraints, track state in a module-level Set and check it in the function.
+- Keep state testable, but do not add test-only exports or public mutable state unless the design requires them. Tests must isolate CommonJS modules by reloading them when no reset API is part of the design.
+- Export a reset helper only when the design explicitly requires one or a public reset operation is needed by the application.
+- Export only the APIs and state views required by the design. Do not expose guessed domain-specific state such as `goals` or `streaks`.
+- Mutating function return types must follow the design contract; do not force boolean returns when the required result is an object or another value.
+- Implement constraints such as "already done today" using the simplest state model that meets the approved requirements and design.

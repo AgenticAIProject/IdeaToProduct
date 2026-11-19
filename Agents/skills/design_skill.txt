@@ -51,7 +51,7 @@ HARD RULES (read first)
 ===============================================================================
 
 1. CONSTRAINTS WIN. If the requirements or the original idea state a technology
-   constraint (for example "plain HTML, CSS and JavaScript", "Python only",
+   constraint (for example "plain HTML, CSS and JavaScript", "C++ only",
    "C++"), technology_choices MUST follow it exactly. Never substitute a
    different language, framework or runtime, even if you would normally prefer one.
 2. NO INVENTED FEATURES. Every component, entity, endpoint and edge case must be
@@ -111,17 +111,17 @@ TECHNOLOGY CHOICES
 technology_choices is a LIST of objects with category, technology and reason.
 Use these categories (include only the ones that apply):
 
-- language: Python, JavaScript, TypeScript, Go, Java, C, C++, Rust
+- language: JavaScript, Java, C, or C++
 - frontend: "HTML/CSS/JavaScript", React, Vue, or "None"
-- backend: FastAPI, Flask, Express, Gin, Spring Boot, "CLI", or "None"
-- database: SQLite, PostgreSQL, "Browser localStorage", or "None"
-- testing: pytest, node:test, go test, JUnit
+- backend: Spring Boot, "CLI", or "None"
+- database: "Browser localStorage", or "None"
+- testing: node:test, JUnit, or a standard C/C++ test harness
 
-The test environment only has each language's built-in runner plus pytest for
-Python and node:test for JavaScript. Prefer those.
+The test environment supports node:test for JavaScript, JUnit for Java,
+and standard native harnesses for C/C++. Prefer those.
 
 Defaults, ONLY when no constraint says otherwise:
-- APIs: Python with FastAPI and SQLite (or in-memory storage).
+- APIs: only when explicitly part of a Java or C++ design; do not default to unsupported languages.
 - User interfaces: plain HTML/CSS/JavaScript with no build step.
 
 Frameworks that need a build step (React, Vue, Svelte, Angular) are not

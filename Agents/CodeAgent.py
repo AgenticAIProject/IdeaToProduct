@@ -58,7 +58,7 @@ class FilePlan(BaseModel):
 
 
 class CodePlan(BaseModel):
-    language: str = Field(description="Main language, e.g. python, javascript, go, java")
+    language: str = Field(description="Main language: C, C++, Java, or JavaScript")
     files: list[FilePlan] = Field(description="Every file needed to run the project. Do NOT include test files.")
     run_command: str = Field(default="", description="Command to run the project")
     test_command: str = Field(default="", description="Command to run tests, e.g. 'pytest --tb=short -v'")
@@ -728,19 +728,6 @@ def Code_Agent(state: AgentState) -> dict:
         if not is_rework:
             # ── First pass: plan, then generate file by file ───────────────────
             plan = make_plan(plan_llm, req_ctx, design)
-            # Ensure requirements.txt is in the plan if this is a Python project
-            is_py = (
-                getattr(plan, "language", "").lower() == "python"
-                or any(f.path.endswith(".py") for f in plan.files)
-                or any("python" in str(c.get("technology", "")).lower() for c in design.get("technology_choices", []))
-            )
-            if is_py and not any(os.path.basename(f.path).lower() == "requirements.txt" for f in plan.files):
-                print("  [Code Agent] Python project detected; injecting requirements.txt into the file plan.")
-                plan.files.append(FilePlan(
-                    path="requirements.txt",
-                    purpose="List third-party Python package dependencies for pip install",
-                    exports=[],
-                ))
             print(f"  [Code Agent] Plan: {[f.path for f in plan.files]}")
             for fp in order_files(plan.files):
                 content, err = generate_and_fix(llm, fp, plan, requirements, design, written, project_id)
@@ -804,10 +791,6 @@ def Code_Agent(state: AgentState) -> dict:
     if c_compile_errors:
         errors["C project compile check"] = "\n".join(c_compile_errors)
 
-    # ── Ensure Python projects have a valid requirements.txt with all detected imports ──
-    ensure_requirements_txt(written, plan, project_id)
-    if "requirements.txt" in written and "requirements.txt" not in meta:
-        meta["requirements.txt"] = FilePlan(path="requirements.txt", purpose="Project dependencies", exports=[])
 
     cross = check_cross_file(written)
     notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]

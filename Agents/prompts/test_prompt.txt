@@ -41,7 +41,7 @@ SAFETY
   no environment secrets, no network.
 
 STACK
-- Python: pytest. JavaScript: node:test + node:assert + node:fs (CommonJS). Go: testing. Java: JUnit.
+- JavaScript: node:test + node:assert + node:fs (CommonJS). Java: JUnit. C/C++: the standard native test harness.
 - Follow the stack playbook if one is provided.
 
 CRITICAL PERSISTENCE FIXTURES:
@@ -49,15 +49,21 @@ If the project under test relies on database operations or storage engine data, 
 
 
 JAVASCRIPT-SPECIFIC ASSERTION RULES (CRITICAL — these are the most common failure patterns):
-1. ALWAYS call `logic._resetState()` at the start of every test() block to clear shared module state.
-   If the exported object has no `_resetState`, assign fresh arrays/objects: `logic.goals = []; logic.streaks = {};`
+1. Isolate shared module state without assuming APIs that are not present:
+   - Inspect the implementation and exports. Call `_resetState()` only if the module exports it.
+   - NEVER assume `_resetState`, `goals`, `streaks`, or any other state property exists.
+   - For CommonJS modules without an exported reset function, load a fresh module instance per test:
+     `delete require.cache[require.resolve('./logic.js')]; const logic = require('./logic.js');`
+     Put this in a helper and call it inside each test.
+   - Do not assign to unexported or read-only properties. Create fixtures through real public
+     functions and check their actual documented return values/effects.
 2. NEVER compare objects with `===`: `assert(logic.streaks === {})` is ALWAYS false.
    Use `assert.deepStrictEqual(logic.streaks, {})` instead.
 3. NEVER call `.includes()` on a function. `logic.displayErrorMessage.includes(...)` is a TypeError.
    To verify error handling, check that the RETURN VALUE is false and that no goal was added.
-4. HTML attribute order is NOT guaranteed. NEVER assert `html.includes('<input id="goal-input">')`.
-   Instead use a flexible pattern: `assert(/id=["']goal-input["']/.test(html))` or check each attribute separately.
-5. After calling a function that should fail (e.g. setGoal('')), assert the return value is false AND
-   assert that logic.goals.length is still 0 — do NOT assert on internal error messages.
-6. `logic.goals` and `logic.streaks` must be live getters (not snapshot copies). The exported object
-   MUST use `get goals() { return goals; }` syntax — if the code does not, the tests will always read stale data.
+4. HTML attribute order is NOT guaranteed. Check required attributes independently, e.g.
+   `assert(/id=["']searchInput["']/.test(html))`.
+5. Do not assume mutating functions return booleans or that internal state is exported. Assert the
+   exact public return shape and effects required by the specification.
+6. Use only exported APIs and fields actually present in the implementation. Do not require
+   live getters for guessed state properties.

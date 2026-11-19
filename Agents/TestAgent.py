@@ -29,14 +29,14 @@ class TestSuiteGeneration(BaseModel):
     )
     test_file_name: str = Field(
         default="test_verification.py",
-        description="The relative filename for the test suite matching project language, e.g. 'verification.test.js' for JS/Node/Frontend, 'test_verification.py' for Python, 'verification_test.go' for Go."
+        description="The relative filename for the test suite: verification.test.js for JavaScript, VerificationTest.java for Java, test_verification.cpp for C++, or test_verification.c for C."
     )
     test_file_content: str = Field(
         description="Complete, executable test code matching the project programming language and runtime."
     )
 
 
-REUSE_PREVIOUS_TESTS = True   # keep tests stable across rework loops so code can converge
+REUSE_PREVIOUS_TESTS = True   # reuse passing tests; regenerate after assertion failures
 MAX_TEST_REPAIRS = 1
 MAX_CONTINUATIONS = 2
 
@@ -44,6 +44,7 @@ MAX_CONTINUATIONS = 2
 TEST_SIDE_PATTERNS = (
     "SyntaxError", "ModuleNotFoundError", "ImportError", "ERROR collecting", "collected 0 items",
     "fixture '", "Cannot find module", "ReferenceError", "SyntaxError: Unexpected",
+    r"_resetState is not a function",
     "no test files", "undefined: ", "cannot find package", "package .* is not in",
 )
 
@@ -137,6 +138,19 @@ def _is_test_side_failure(result: dict, code_files: list | None = None) -> bool:
         if re.search(rf"^\s*(?:from|import)\s+{re.escape(top)}\b", code_text, re.MULTILINE):
             return False
     return any(re.search(p, blob) for p in TEST_SIDE_PATTERNS)
+
+
+def _can_reuse_previous_tests(test_results: dict) -> bool:
+    """Reuse a suite only after it passed or when Docker prevented execution."""
+    return bool(
+        REUSE_PREVIOUS_TESTS
+        and test_results.get("test_files")
+        and not test_results.get("test_side_error")
+        and (
+            (test_results.get("success") is True and test_results.get("failed_tests", 0) == 0)
+            or test_results.get("execution_status") == "docker_unavailable"
+        )
+    )
 
 
 def _interfaces(code_files: list) -> str:
@@ -241,12 +255,10 @@ def Test_Agent(state: AgentState) -> dict:
 
     # 1. Detect project runtime stack from files
     file_paths = [f.get("path", "").lower() for f in code_files if isinstance(f, dict)]
-    is_go = any(p.endswith(".go") or p == "go.mod" for p in file_paths)
     is_java = any(p.endswith((".java", ".jar")) or p == "pom.xml" for p in file_paths)
     is_cpp = any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")) for p in file_paths)
     is_c = any(p.endswith((".c", ".h")) for p in file_paths)
-    is_python = any(p.endswith(".py") or p == "requirements.txt" for p in file_paths)
-    is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths) and not is_python
+    is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths)
 
     if is_js_or_frontend:
         stack_guidelines = """
@@ -265,18 +277,31 @@ CRITICAL TESTING INSTRUCTIONS:
        assert(html.includes('<input id="goal-input">'))  ← WRONG (attribute order not guaranteed)
    - To verify logic: require('./logic.js') and ONLY test functions and properties explicitly in module.exports.
      NEVER call unexported internal helpers.
-6. STATE ISOLATION IS MANDATORY — this is the #1 source of test failures:
-   - Call `logic._resetState()` at the VERY START of EVERY test() block before anything else.
-   - If _resetState is not exported, manually reset: `logic.goals = []; logic.streaks = {};`
-   - Without reset, goals added in TC-02 will still be in logic.goals when TC-07 runs.
-   Correct skeleton:
+6. STATE ISOLATION IS MANDATORY:
+   - Inspect the actual source and exports before using any reset helper or state property.
+     NEVER assume `_resetState`, `goals`, `streaks`, or `textbooks` exists.
+   - If `_resetState` is exported, it may be called at the start of each test.
+   - Otherwise, for CommonJS modules, load a fresh module instance per test:
+       function loadFreshLogic() {
+         const path = require.resolve('./logic.js');
+         delete require.cache[path];
+         return require(path);
+       }
+     Then obtain `const logic = loadFreshLogic()` inside each test.
+   - Do not assign to properties that are not exported or writable. Build test data using
+     actual public functions and assert their observed return values and effects.
+   Correct skeleton when the module has no reset export:
    const test = require('node:test');
    const assert = require('node:assert');
-   const fs = require('node:fs');
-   const logic = require('./logic.js');
+
+   function loadFreshLogic() {
+     const path = require.resolve('./logic.js');
+     delete require.cache[path];
+     return require(path);
+   }
 
    test('TC-01: ...', () => {
-     logic._resetState();          // ← ALWAYS FIRST
+     const logic = loadFreshLogic();
      // ... test body
    });
 7. ASSERTION RULES — these mistakes cause permanent test failures:
@@ -285,21 +310,13 @@ CRITICAL TESTING INSTRUCTIONS:
       assert.deepStrictEqual(logic.streaks, {})  ← CORRECT
    b. NEVER call .includes() on a function:
       assert(logic.displayErrorMessage.includes('...'))  ← TypeError, function has no .includes
-      Instead: assert.strictEqual(logic.setGoal(''), false)  ← check return value
-   c. NEVER assert on internal error message text — assert the OBSERVABLE EFFECT:
-      assert.strictEqual(logic.goals.length, 0)   ← correct
-      assert.strictEqual(result, false)            ← correct
-   d. Use assert.strictEqual for primitives, assert.deepStrictEqual for objects/arrays.
+      Instead: assert the documented/public return value and observable effect.
+   c. Never assume a mutator returns a boolean. Assert the exact return shape implemented
+      by the public function and required by the requirements.
+   d. NEVER assert on internal error message text — assert the observable public effect.
+   e. Use assert.strictEqual for primitives, assert.deepStrictEqual for objects/arrays.
 8. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
 9. NEVER generate Python code for a JavaScript frontend project!
-"""
-    elif is_go:
-        stack_guidelines = """
-=== PROJECT STACK: Go ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'verification_test.go'
-2. Use standard 'testing' package.
-3. NEVER generate Python code for a Go project!
 """
     elif is_java:
         stack_guidelines = """
@@ -331,18 +348,14 @@ CRITICAL TESTING INSTRUCTIONS:
 """
     else:
         stack_guidelines = """
-=== PROJECT STACK: Python ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'test_verification.py'
-2. Use pytest or unittest.
-3. Directly import modules under test.
+=== UNSUPPORTED PROJECT STACK ===
+Only C, C++, Java, JavaScript, HTML, and CSS projects are supported.
+Do not generate or execute tests for another language.
 """
 
     # 2. Test file name / command per stack
     if is_js_or_frontend:
         default_name, test_command = "verification.test.js", "node --test verification.test.js"
-    elif is_go:
-        default_name, test_command = "verification_test.go", "go test -v ./..."
     elif is_java:
         default_name, test_command = "VerificationTest.java", "mvn test"
     elif is_cpp:
@@ -350,10 +363,8 @@ CRITICAL TESTING INSTRUCTIONS:
     elif is_c:
         default_name, test_command = "test_verification.c", None
     else:
-        default_name = "test_verification.py"
-        test_command = code_artifact.get("test_command") or "pytest --tb=short -v"
-        if test_command.startswith("pytest"):
-            test_command = "python -m " + test_command   # puts project root on sys.path
+        default_name = "verification.test.js"
+        test_command = "node --test verification.test.js"
 
     project_path = state.get("generated_project_path", "")
     if not project_path:
@@ -365,6 +376,30 @@ CRITICAL TESTING INSTRUCTIONS:
     req_context = _compact_test_requirements(requirements)
     design_context = _compact_test_design(design)
     code_context = _compact_code_context(code_files)
+
+    prev = state.get("test_results") or {}
+    prev_tests = prev.get("test_files") or {}
+    previous_test_audit = ""
+    if (
+        prev_tests
+        and not prev.get("success", False)
+        and prev.get("execution_status") != "docker_unavailable"
+    ):
+        previous_test_name, previous_test_content = next(iter(prev_tests.items()))
+        previous_output = (prev.get("raw_output") or "")[-3000:]
+        previous_test_audit = f"""
+=== PREVIOUS FAILING TEST SUITE — AUDIT, DO NOT REUSE ===
+The previous suite failed. Treat its assertions as untrusted: compare each one with the
+acceptance criteria and design below. Do not require UI elements, fields, endpoints, or
+behaviors that are not specified. Regenerate tests that match the actual requirements;
+keep valid requirement-based assertions even if the implementation currently fails them.
+
+Previous test file ({previous_test_name}, truncated):
+{previous_test_content[:3000]}
+
+Previous test output (last 8000 characters):
+{previous_output}
+"""
 
     base_context = f"""=== REQUIREMENTS & ACCEPTANCE CRITERIA ===
 {req_context}
@@ -381,17 +416,14 @@ CRITICAL TESTING INSTRUCTIONS:
 {stack_guidelines}
 
 {stack_skill(design, 'TEST')}
+{previous_test_audit}
 """
-
-    prev = state.get("test_results") or {}
-    prev_tests = prev.get("test_files") or {}
-    prev_was_test_side = bool(prev.get("test_side_error"))
 
     plan_text, test_name, test_content = "", default_name, ""
     test_cases = []
 
-    # 3a. Keep the same tests across rework loops (moving-target tests => code never converges)
-    if REUSE_PREVIOUS_TESTS and prev_tests and not prev_was_test_side:
+    # Keep a stable suite only when it passed or execution never started (Docker unavailable).
+    if _can_reuse_previous_tests(prev):
         test_name, test_content = next(iter(prev_tests.items()))
         plan_text = prev.get("test_plan", "")
         test_cases = prev.get("test_cases") or []
@@ -461,6 +493,7 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
         "failed_tests": execution_result["failed_tests"],
         "errors": execution_result["errors"],
         "raw_output": execution_result["raw_output"],
+        "execution_status": execution_result.get("execution_status"),
         "summary": execution_result["summary"],
         "duration_seconds": execution_result["duration_seconds"],
         "test_files": test_files_to_run,

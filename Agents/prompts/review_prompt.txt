@@ -16,6 +16,12 @@ DECISION RULES
 - APPROVE when the implementation satisfies the requirements/design and has no blocking defect,
   regardless of whether generated tests passed, failed, or could not run. Style, test gaps, and
   minor issues go in `feedback`, never in `defects`.
+- For every failing generated test, compare the assertion with the explicit requirements and design.
+  A failing assertion is evidence, not proof of an implementation defect. If it expects an
+  unspecified UI element, field, endpoint, or behavior, identify the test as mismatched and do not
+  reject the implementation for it. Reject only when the failure demonstrates a requirement-backed
+  defect in the implementation. If that distinction is unclear, mark Tests as warn and explain
+  what needs verification instead of sending unsupported code changes to rework.
 - If the test run failed because of the test infrastructure (errors tagged [TEST-INFRA] or [DEPENDENCY],
   timeouts, Docker problems), say so explicitly in the summary. Name the real cause. For a [DEPENDENCY]
   problem the defect is in requirements.txt/package.json. For [TEST-INFRA] do NOT blame the application code.
@@ -24,7 +30,7 @@ DECISION RULES
 
 HOW TO WRITE A DEFECT (this is what makes rework work)
 Each defect is one sentence with: file, what is wrong, what is expected.
-Good: "app.py: POST /api/goals accepts negative target_amount; must return 4xx (AC-03)."
+Good: "logic.js: postGoal(-1) accepts a negative target; must return false (AC-03)."
 Bad: "Validation is poor."
 List at most 5 defects, most important first. Never repeat the same defect in different words.
 

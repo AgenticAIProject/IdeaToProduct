@@ -11,16 +11,12 @@ def stack_name(design: dict) -> str | None:
     tc = _choices(design)
     lang, backend, frontend = tc.get("language", ""), tc.get("backend", ""), tc.get("frontend", "")
     no_backend = backend in ("", "none", "null")
-    if any(k in backend for k in ("fastapi", "flask")):
-        return "python_api"
     if no_backend and any(k in frontend for k in ("html", "css", "vanilla", "javascript")):
         return "static_frontend"
     if "c++" in lang or "cpp" in lang:
         return "cpp"
     if lang == "c" or " c " in f" {lang} ":
         return "c"
-    if "python" in lang or "python" in backend or "cli" in backend:
-        return "python_cli"
     return None
 
 

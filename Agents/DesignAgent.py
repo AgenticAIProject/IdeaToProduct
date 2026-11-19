@@ -54,7 +54,7 @@ class EdgeCase(BaseModel):
 
 class TechnologyChoice(BaseModel):
     category: str = Field(
-        description="Core architecture category: 'language' (Python, Go, Java, TypeScript, Rust), 'backend' (FastAPI, Gin, Spring Boot, Flask, Express), 'frontend' (HTML/CSS/JS, React, Vue, Svelte), 'database' (PostgreSQL, MongoDB, SQLite, MySQL, Redis), 'testing' (pytest, go test, JUnit, Jest)"
+        description="Core architecture category: 'language' (C, C++, Java, JavaScript), 'backend' (CLI, Spring Boot, or none), 'frontend' (HTML/CSS/JS or none), 'database' (Browser localStorage or none), 'testing' (node:test, JUnit, or a C/C++ harness)"
     )
     technology: str = Field(description="Selected technology name, e.g. 'Go', 'Python', 'FastAPI', 'PostgreSQL', 'MongoDB', 'React'")
     reason: str = Field(description="Reason for selection")
@@ -131,22 +131,24 @@ def generate_design_fallback(requirements: dict, idea: str = "") -> DesignDocume
         ]
         api_endpoints = []
         data_entities = []
-    else:
-        system_type = "Backend REST API"
+    elif requested == "Java":
+        system_type = "Java Application"
         tech_choices = [
-            TechnologyChoice(category="language", technology="Python", reason="Modern high-performance backend language."),
-            TechnologyChoice(category="backend", technology="FastAPI", reason="Modern high-performance async Python framework."),
-            TechnologyChoice(category="database", technology="SQLite", reason="Self-contained local relational database."),
-            TechnologyChoice(category="testing", technology="pytest", reason="Standard Python test framework.")
+            TechnologyChoice(category="language", technology="Java", reason="Explicitly supported Java implementation."),
+            TechnologyChoice(category="backend", technology="none", reason="Standalone Java application."),
+            TechnologyChoice(category="testing", technology="JUnit", reason="Standard Java test framework.")
         ]
-        api_endpoints = [
-            APIEndpoint(id="EP-01", method="POST", path="/api/items", description="Create a new item", requirement_ids=["FR-01"]),
-            APIEndpoint(id="EP-02", method="GET", path="/api/items", description="List all items", requirement_ids=["FR-01"]),
-            APIEndpoint(id="EP-03", method="GET", path="/api/items/{id}", description="Get item by ID", requirement_ids=["FR-01"])
+        api_endpoints = []
+        data_entities = []
+    else:
+        system_type = "CLI Application"
+        tech_choices = [
+            TechnologyChoice(category="language", technology="C++", reason="Supported default for an unspecified implementation."),
+            TechnologyChoice(category="backend", technology="none", reason="Standalone command-line application."),
+            TechnologyChoice(category="testing", technology="g++", reason="Standard C++ test harness.")
         ]
-        data_entities = [
-            DataEntity(id="ENT-01", name="Item", purpose="Primary data entity", attributes=["id", "title", "created_at"], relationships=[], requirement_ids=["FR-01"])
-        ]
+        api_endpoints = []
+        data_entities = []
 
     components = [
         DesignComponent(id="COMP-01", name="MainController", responsibility=f"Coordinates core functionality for {problem[:40]}.", requirement_ids=["FR-01"]),
@@ -202,10 +204,8 @@ def _requested_language(requirements: dict, idea: str = "") -> str:
             return "C"
 
     languages = (
-        ("typescript", "TypeScript"), ("javascript", "JavaScript"), ("c++", "C++"),
-        ("rust", "Rust"), ("golang", "Go"), (" go ", "Go"), ("java", "Java"),
-        ("python", "Python"), ("kotlin", "Kotlin"), ("swift", "Swift"),
-        ("c#", "C#"), ("ruby", "Ruby"), ("php", "PHP"), ("html", "HTML/CSS"),
+        ("javascript", "JavaScript"), ("java", "Java"), ("c++", "C++"),
+        ("html", "HTML/CSS"),
     )
     for marker, language in languages:
         if re.search(rf"(?<![a-z]){re.escape(marker.strip())}(?![a-z])", text):
@@ -297,6 +297,10 @@ def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
     frontend = _tech(design, "frontend").lower()
     req_text = str(requirements).lower()
     no_backend = backend in ("", "none", "null", "n/a")
+    persistence_requested = any(
+        marker in req_text
+        for marker in ("text file", "textfile", "localstorage", "browser storage", "persist", "persistence")
+    )
 
     # 1. Framework the sandbox cannot execute, and the user never asked for it -> plain HTML/CSS/JS
     if any(k in frontend for k in UNBUILDABLE_FRONTENDS) and not any(k in req_text for k in UNBUILDABLE_FRONTENDS):
@@ -319,10 +323,23 @@ def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
         if design.get("api_endpoints"):
             design["api_endpoints"] = []
             changes.append("Removed API endpoints: the design has no backend; data is provided by in-app sample data.")
-        kept = [c for c in choices if str(c.get("category", "")).lower() != "database"]
-        if len(kept) != len(choices):
-            design["technology_choices"] = kept
-            changes.append("Removed database choice: a frontend-only app keeps data in memory/sample data.")
+        if persistence_requested:
+            persistence_choice = next(
+                (c for c in choices if str(c.get("category", "")).lower() in ("database", "persistence")),
+                None,
+            )
+            if persistence_choice is None:
+                choices.append({
+                    "category": "persistence",
+                    "technology": "Browser localStorage plus text-file export",
+                    "reason": "Frontend-only persistence without a server-side database.",
+                })
+                changes.append("Kept frontend persistence: Browser localStorage plus text-file export.")
+        else:
+            kept = [c for c in choices if str(c.get("category", "")).lower() not in ("database", "persistence")]
+            if len(kept) != len(choices):
+                design["technology_choices"] = kept
+                changes.append("Removed database choice: a frontend-only app keeps data in memory/sample data.")
         if "html" in frontend and design.get("libraries_and_tools"):
             design["libraries_and_tools"] = []
 
