@@ -1,6 +1,7 @@
 import json
 import re
 import imports
+from skill_registry import load_agent_skills
 from pydantic import BaseModel, Field
 from State_definition import AgentState
 
@@ -395,15 +396,16 @@ def Design_Agent(state: AgentState) -> dict:
 
     requirements = state.get("requirements", {})
     idea = state.get("idea", "")
+    design_skills = load_agent_skills("design")
 
     response = None
     try:
         llm = imports.get_llm(agent_type="design", max_tokens=6000)
         messages = [imports.SystemMessage(content=imports.load_prompt("prompts/design_prompt.txt"))]
-        try:
-            messages.append(imports.SystemMessage(content=imports.load_prompt("skills/design_skill.txt")))
-        except OSError:
-            print("  [Design Agent] skills/design_skill.txt not found - continuing with the prompt only.")
+        messages.extend(
+            imports.SystemMessage(content=skill.instructions)
+            for skill in design_skills
+        )
         messages.append(imports.HumanMessage(
             content=f"Original Product Idea:\n{idea}\n\nHere are the requirements produced by the Requirement Agent:\n\n"
                     + json.dumps(requirements, indent=1, ensure_ascii=False, default=str)

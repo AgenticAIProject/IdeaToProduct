@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import imports
 from stack_skills import stack_skill
+from skill_registry import load_agent_skills
 from pydantic import BaseModel, Field
 from State_definition import AgentState
 from test_runner import run_code_tests
@@ -371,7 +372,12 @@ Do not generate or execute tests for another language.
         project_path = os.path.join(os.getcwd(), "generated_projects", state.get("project_id", "proj_001"))
 
     llm = imports.get_llm(agent_type="test", max_tokens=4000)
-    system_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/test_prompt.txt"))
+    test_skills = "\n\n".join(
+        skill.instructions for skill in load_agent_skills("test")
+    )
+    system_prompt = imports.SystemMessage(content=(
+        imports.load_prompt("prompts/test_prompt.txt") + "\n\n" + test_skills
+    ))
 
     req_context = _compact_test_requirements(requirements)
     design_context = _compact_test_design(design)

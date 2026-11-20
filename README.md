@@ -50,6 +50,29 @@ The system is designed around two core principles:
 
 ---
 
+## Agent skills
+
+The agents use skills stored as `Agents/skills/<skill-name>/SKILL.md`. Each file
+uses the Agent Skills format's YAML frontmatter (`name` and `description`)
+followed by its instruction body. The application validates that metadata and
+assigns fixed role skills through `Agents/skill_registry.py`.
+
+This project uses deterministic, code-controlled selection rather than asking a
+model to pick skills. Stack-specific skills are selected from the approved
+design's technology choices. To add a task-specific skill, create its
+`SKILL.md`, register it as optional for the target agent, and add an explicit
+agent-side rule for when to load it. For example, a database skill can be
+registered for Code and selected when the design includes a database; a
+diagram skill can be registered for Design and selected when a diagram is
+requested and supported by its output contract.
+
+The `SKILL.md` format standardizes how skill instructions are packaged; the
+registry and the logic that attaches instructions to model calls are specific
+to this application. The loader sends the skill's instruction body as prompt
+text; it does not execute skill code or automatically load referenced files.
+
+---
+
 ## Problem
 
 Current AI coding systems can generate code from natural-language prompts, but a software project involves more than code generation.

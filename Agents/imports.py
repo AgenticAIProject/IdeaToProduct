@@ -267,7 +267,7 @@ def set_runtime_models(models: dict[str, str]) -> None:
 
 def load_prompt(filename: str) -> str:
     path = Path(__file__).resolve().parent / filename
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 import imports
 from State_definition import AgentState
+from skill_registry import load_agent_skills
 from stack_skills import stack_skill
 from tools import WORKSPACE_ROOT, repo_scaffold
 
@@ -513,6 +514,9 @@ def complete_text(llm, messages: list) -> str:
 
 def build_system_prompt(design: dict) -> str:
     base = imports.load_prompt("prompts/code_prompt.txt")
+    role_skills = "\n\n".join(
+        skill.instructions for skill in load_agent_skills("code")
+    )
     playbook = stack_skill(design, "CODE")
     return base + f"""
 
@@ -522,6 +526,8 @@ OUTPUT FORMAT FOR FILE CALLS
 - Do NOT write test files. A separate QA agent writes tests against your code.
 - Use exactly the names listed in the plan's `exports`, so imports and tests resolve.
 - The project must run from its root directory with the plan's run_command.
+
+{role_skills}
 
 {playbook}
 """

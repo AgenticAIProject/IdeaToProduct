@@ -1,3 +1,8 @@
+---
+name: stack-static-frontend
+description: Code and test guidance for standalone HTML, CSS, and JavaScript projects without a build step.
+---
+
 ## CODE
 Static frontend (HTML/CSS/JS), no build step, works directly by opening index.html in a web browser.
 - Files: `index.html`, `style.css`, `logic.js`, `app.js`, plus a minimal `package.json` (`{"name": "...", "version": "1.0.0", "scripts": {"test": "node --test"}}`).

@@ -2,6 +2,7 @@ import imports
 import json
 from pydantic import BaseModel, Field
 from State_definition import AgentState
+from skill_registry import load_agent_skills
 
 
 class DocumentationDocument(BaseModel):
@@ -107,6 +108,10 @@ Source:
     llm = imports.get_llm(agent_type="documentation", max_tokens=5000)
 
     doc_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/documentation_prompt.txt"))
+    doc_skills = [
+        imports.SystemMessage(content=skill.instructions)
+        for skill in load_agent_skills("documentation")
+    ]
 
     human_prompt = imports.HumanMessage(
         content=f"""
@@ -143,6 +148,7 @@ when the artifacts do not provide the information.
 
     response = imports.invoke_structured(llm, DocumentationDocument, [
         doc_prompt,
+        *doc_skills,
         human_prompt
     ])
 

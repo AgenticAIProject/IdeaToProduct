@@ -1,5 +1,13 @@
 """Pick the stack playbook for a design and return its CODE or TEST section."""
-import imports
+
+from skill_registry import load_skill
+
+
+_STACK_SKILL_IDS = {
+    "static_frontend": "stack-static-frontend",
+    "c": "stack-c",
+    "cpp": "stack-cpp",
+}
 
 
 def _choices(design: dict) -> dict:
@@ -22,16 +30,17 @@ def stack_name(design: dict) -> str | None:
 
 def stack_skill(design: dict, section: str) -> str:
     """section: 'CODE' or 'TEST'. Returns '' when no playbook matches."""
+    section = section.upper()
+    if section not in ("CODE", "TEST"):
+        raise ValueError(f"Unsupported stack skill section: {section!r}")
+
     name = stack_name(design)
     if not name:
         return ""
-    try:
-        text = imports.load_prompt(f"skills/stack_{name}.txt")
-    except Exception:
-        return ""
+    skill = load_skill(_STACK_SKILL_IDS[name])
     parts = {"CODE": "", "TEST": ""}
     current = None
-    for line in text.splitlines():
+    for line in skill.instructions.splitlines():
         if line.strip() in ("## CODE", "## TEST"):
             current = line.strip()[3:]
             continue

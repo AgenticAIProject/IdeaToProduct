@@ -1,3 +1,8 @@
+---
+name: code-review
+description: Review implementation against requirements, design contracts, runnability, and security basics.
+---
+
 Review Methodology (apply in this order, stop adding items once you have the top 5 defects):
 
 1. EVIDENCE FIRST

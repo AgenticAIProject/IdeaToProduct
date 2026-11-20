@@ -1,3 +1,8 @@
+---
+name: stack-c
+description: Code and test guidance for standalone C11 projects.
+---
+
 ## CODE
 Standalone C project (C11), compiles with gcc.
 - Modular architecture: Place function prototypes and structs in header files (.h) and implementations in .c files.

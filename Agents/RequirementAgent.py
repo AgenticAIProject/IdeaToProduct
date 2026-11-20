@@ -1,6 +1,7 @@
 import re
 from pydantic import BaseModel, Field
 import imports
+from skill_registry import load_agent_skills
 from tools import fetch_github_grounding
 
 
@@ -81,6 +82,10 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
     # 1. Create LLM
     # ---------------------------------------------------------
 
+    requirement_skill_messages = [
+        imports.SystemMessage(content=skill.instructions)
+        for skill in load_agent_skills("requirement")
+    ]
     llm = imports.get_llm(agent_type="requirement", max_tokens=3000)
 
     # ---------------------------------------------------------
@@ -119,7 +124,7 @@ def Requirement_Agent(state: imports.AgentState) -> dict:
         
         clarification_check = imports.invoke_structured(
             llm, ClarificationResponse,
-            [clarification_prompt, imports.HumanMessage(content=user_input)]
+            [clarification_prompt, *requirement_skill_messages, imports.HumanMessage(content=user_input)]
         )
 
     # ---------------------------------------------------------
@@ -165,12 +170,10 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
     # ---------------------------------------------------------
 
     requirement_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/requirement_prompt.txt"))
-    requirement_skill = imports.SystemMessage(content=imports.load_prompt("skills/requirement_skill.txt"))
-
     response = imports.invoke_structured(llm, RequirementsList, [
-        requirement_prompt, 
-        requirement_skill, 
-        grounding_prompt, 
+        requirement_prompt,
+        *requirement_skill_messages,
+        grounding_prompt,
         imports.HumanMessage(content=user_input)
     ])
 

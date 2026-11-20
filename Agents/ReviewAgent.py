@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import imports
+from skill_registry import load_agent_skills
 
 
 class GateCheck(BaseModel):
@@ -167,15 +168,18 @@ def Review_Agent(state: imports.AgentState) -> dict:
 """
 
     response: Optional[ReviewResult] = None
+    review_skills = [
+        imports.SystemMessage(content=skill.instructions)
+        for skill in load_agent_skills("review")
+    ]
     try:
         llm = imports.get_llm(agent_type="review", max_tokens=3000)
         review_prompt = imports.SystemMessage(content=imports.load_prompt("prompts/review_prompt.txt"))
-        review_skill = imports.SystemMessage(content=imports.load_prompt("skills/review_skill.txt"))
 
         review_llm = llm.with_structured_output(ReviewResult)
         result = review_llm.invoke([
             review_prompt,
-            review_skill,
+            *review_skills,
             imports.HumanMessage(content=user_input)
         ])
 

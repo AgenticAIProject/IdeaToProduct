@@ -110,11 +110,34 @@ generated artifact metadata are not durable or shared.
 | `Agents/State_definition.py` | Shared `AgentState` data contract |
 | `Agents/*Agent.py` | Specialist agent implementations |
 | `Agents/prompts/` | Role-specific system prompts |
-| `Agents/skills/` | Stack and domain guidance injected into prompts |
+| `Agents/skills/<skill-name>/SKILL.md` | Agent Skills-format instructions and metadata |
+| `Agents/skill_registry.py` | Validates and maps skills to agents; no model-based selection |
 | `Agents/imports.py` | LLM construction, prompt loading, structured-output fallback |
 | `Agents/tools.py` | Grounding, project scaffolding, and utility tools |
 | `Agents/test_runner.py` | Multi-stack generated-project test execution |
 | `generated_projects/` | Generated source projects and persisted stage artifacts |
+
+### 4.1 Agent skills
+
+Each registered skill lives in `Agents/skills/<skill-name>/SKILL.md` and starts
+with YAML frontmatter containing the required `name` and `description` fields.
+The directory name must match the metadata name. The instruction body follows
+the frontmatter.
+
+`Agents/skill_registry.py` maps fixed role skills to the Requirement, Design,
+Code, Test, Review, and Documentation Agents. Each agent loads its registered
+skill instructions and includes them in its system messages. Stack playbooks
+are separate skills selected by Python from the design's technology choices;
+the Code and Test Agents receive only the corresponding section.
+
+Selection is deterministic and code-controlled. The model does not discover,
+register, or choose skills. To add an optional task-specific skill, create its
+`SKILL.md`, register its ID under `OPTIONAL_SKILLS_BY_AGENT`, then pass that ID
+from an explicit agent-side rule when the task warrants it. The skill format
+follows the Agent Skills file convention; runtime loading and agent assignment
+are application behavior, not automatic framework registration. The loader sends
+the `SKILL.md` instruction body as prompt text; it does not execute skill code or
+automatically load referenced files.
 
 ## 5. Core workflow
 

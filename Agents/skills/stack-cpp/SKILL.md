@@ -1,3 +1,8 @@
+---
+name: stack-cpp
+description: Code and test guidance for standalone C++17 projects.
+---
+
 ## CODE
 Standalone C++ project (C++17), compiles with g++.
 - Modular architecture: Place class definitions and function declarations in header files (.hpp or .h) and implementation in .cpp files.
