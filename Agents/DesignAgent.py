@@ -4,6 +4,7 @@ import imports
 from skill_registry import load_agent_skills
 from pydantic import BaseModel, Field
 from State_definition import AgentState
+from test_stacks import TEST_STACKS, UNSUPPORTED_FRONTENDS, normalize_stack_language
 
 class DesignComponent(BaseModel):
     id: str = Field(description="Unique ID in the form COMP-01, COMP-02, ...")
@@ -55,9 +56,9 @@ class EdgeCase(BaseModel):
 
 class TechnologyChoice(BaseModel):
     category: str = Field(
-        description="Core architecture category: 'language' (C, C++, Java, JavaScript), 'backend' (CLI, Spring Boot, or none), 'frontend' (HTML/CSS/JS or none), 'database' (Browser localStorage or none), 'testing' (node:test, JUnit, or a C/C++ harness)"
+        description="Core architecture category: 'language' (C, C++, JavaScript), 'backend' (Node.js, CLI, or none), 'frontend' (plain HTML/CSS/JavaScript or none), 'database' (Browser localStorage or none), 'testing' (node:test or a C/C++ harness)"
     )
-    technology: str = Field(description="Selected technology name, e.g. 'Go', 'Python', 'FastAPI', 'PostgreSQL', 'MongoDB', 'React'")
+    technology: str = Field(description="Selected technology name from the supported project stack, e.g. C, C++, JavaScript, HTML/CSS/JavaScript, Node.js, or browser localStorage.")
     reason: str = Field(description="Reason for selection")
 
 
@@ -132,15 +133,6 @@ def generate_design_fallback(requirements: dict, idea: str = "") -> DesignDocume
         ]
         api_endpoints = []
         data_entities = []
-    elif requested == "Java":
-        system_type = "Java Application"
-        tech_choices = [
-            TechnologyChoice(category="language", technology="Java", reason="Explicitly supported Java implementation."),
-            TechnologyChoice(category="backend", technology="none", reason="Standalone Java application."),
-            TechnologyChoice(category="testing", technology="JUnit", reason="Standard Java test framework.")
-        ]
-        api_endpoints = []
-        data_entities = []
     else:
         system_type = "CLI Application"
         tech_choices = [
@@ -177,10 +169,6 @@ def generate_design_fallback(requirements: dict, idea: str = "") -> DesignDocume
     )
 
 
-# Frameworks the test sandbox cannot build/run (no npm install, no bundler, node:test only).
-UNBUILDABLE_FRONTENDS = ("react", "vue", "svelte", "angular", "next", "nuxt")
-
-
 def _tech(design: dict, category: str) -> str:
     for c in design.get("technology_choices", []):
         if str(c.get("category", "")).lower() == category:
@@ -205,8 +193,7 @@ def _requested_language(requirements: dict, idea: str = "") -> str:
             return "C"
 
     languages = (
-        ("javascript", "JavaScript"), ("java", "Java"), ("c++", "C++"),
-        ("html", "HTML/CSS"),
+        ("javascript", "JavaScript"), ("c++", "C++"), ("html", "HTML/CSS"),
     )
     for marker, language in languages:
         if re.search(rf"(?<![a-z]){re.escape(marker.strip())}(?![a-z])", text):
@@ -294,6 +281,22 @@ def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
     changes = []
     _enforce_requested_language(design, requirements, idea)
     choices = design.get("technology_choices", [])
+    language_choice = next(
+        (choice for choice in choices if str(choice.get("category", "")).lower() == "language"),
+        None,
+    )
+    if language_choice:
+        selected_language = str(language_choice.get("technology", "")).strip().lower()
+        if normalize_stack_language(selected_language) is None:
+            supported_default = _requested_language(requirements, idea)
+            if supported_default not in ("C", "C++", "HTML/CSS", "JavaScript"):
+                supported_default = TEST_STACKS["cpp"].language
+            replacement = "JavaScript" if supported_default == "HTML/CSS" else supported_default
+            language_choice["technology"] = replacement
+            language_choice["reason"] = "Adjusted to a supported generated-project language."
+            changes.append(
+                f"Replaced unsupported language '{selected_language}' with supported language '{replacement}'."
+            )
     backend = _tech(design, "backend").lower()
     frontend = _tech(design, "frontend").lower()
     req_text = str(requirements).lower()
@@ -303,8 +306,8 @@ def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
         for marker in ("text file", "textfile", "localstorage", "browser storage", "persist", "persistence")
     )
 
-    # 1. Framework the sandbox cannot execute, and the user never asked for it -> plain HTML/CSS/JS
-    if any(k in frontend for k in UNBUILDABLE_FRONTENDS) and not any(k in req_text for k in UNBUILDABLE_FRONTENDS):
+    # 1. Only plain HTML/CSS/JavaScript frontends are supported by the test runner.
+    if any(k in frontend for k in UNSUPPORTED_FRONTENDS):
         for c in choices:
             cat = str(c.get("category", "")).lower()
             if cat == "frontend":
@@ -316,7 +319,7 @@ def normalize_design(design: dict, requirements: dict, idea: str = "") -> dict:
                 c["technology"] = "node:test"
                 c["reason"] = "Built-in Node test runner; no dependencies required."
         design["libraries_and_tools"] = []
-        changes.append("Frontend simplified to plain HTML/CSS/JS (no build step available; framework not required by the requirements).")
+        changes.append("Frontend simplified to plain HTML/CSS/JavaScript because frameworks are unsupported by the generated-project test runner.")
         frontend = "html/css/js"
 
     # 2. No backend => no API endpoints and no server-side database

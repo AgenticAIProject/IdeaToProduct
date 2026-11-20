@@ -1,50 +1,48 @@
 """Pick the stack playbook for a design and return its CODE or TEST section."""
 
 from skill_registry import load_skill
-
-
-_STACK_SKILL_IDS = {
-    "static_frontend": "stack-static-frontend",
-    "c": "stack-c",
-    "cpp": "stack-cpp",
-}
-
-
-def _choices(design: dict) -> dict:
-    return {str(c.get("category", "")).lower(): str(c.get("technology", "")).lower()
-            for c in (design or {}).get("technology_choices", []) if isinstance(c, dict)}
+from test_stacks import TEST_STACKS, declared_stack_key
 
 
 def stack_name(design: dict) -> str | None:
-    tc = _choices(design)
-    lang, backend, frontend = tc.get("language", ""), tc.get("backend", ""), tc.get("frontend", "")
+    try:
+        key = declared_stack_key(design or {})
+    except ValueError:
+        return None
+    backend = next(
+        (
+            str(choice.get("technology", "")).strip().lower()
+            for choice in (design or {}).get("technology_choices", [])
+            if isinstance(choice, dict) and str(choice.get("category", "")).strip().lower() == "backend"
+        ),
+        "",
+    )
     no_backend = backend in ("", "none", "null")
-    if no_backend and any(k in frontend for k in ("html", "css", "vanilla", "javascript")):
-        return "static_frontend"
-    if "c++" in lang or "cpp" in lang:
-        return "cpp"
-    if lang == "c" or " c " in f" {lang} ":
-        return "c"
-    return None
+    if key == "javascript":
+        return "static_frontend" if no_backend else None
+    return key
 
 
 def stack_skill(design: dict, section: str) -> str:
-    """section: 'CODE' or 'TEST'. Returns '' when no playbook matches."""
+    """Return the CODE section for a matching stack playbook."""
     section = section.upper()
-    if section not in ("CODE", "TEST"):
+    if section != "CODE":
         raise ValueError(f"Unsupported stack skill section: {section!r}")
 
     name = stack_name(design)
     if not name:
         return ""
-    skill = load_skill(_STACK_SKILL_IDS[name])
-    parts = {"CODE": "", "TEST": ""}
+    stack_key = "javascript" if name == "static_frontend" else name
+    skill = load_skill(TEST_STACKS[stack_key].code_skill_id)
+    body = []
     current = None
     for line in skill.instructions.splitlines():
-        if line.strip() in ("## CODE", "## TEST"):
+        if line.strip() == "## CODE":
             current = line.strip()[3:]
             continue
-        if current:
-            parts[current] += line + "\n"
-    body = parts.get(section, "").strip()
+        if line.startswith("## "):
+            current = None
+        elif current:
+            body.append(line)
+    body = "\n".join(body).strip()
     return f"STACK PLAYBOOK ({name}, {section.lower()} rules):\n{body}" if body else ""

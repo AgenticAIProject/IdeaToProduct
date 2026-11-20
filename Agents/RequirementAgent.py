@@ -200,10 +200,12 @@ INSTRUCTION: Use the above real developer issues to directly inform your:
         _ensure_constraint("The application must be implemented in C++ (C++17 standard).")
     elif (re.search(r"\b(?:in\s+c\b|c\s+language|using\s+c\b|c\s+programming|\bc\s+code\b)", user_idea_lower) or re.search(r"(?<![a-z0-9_])c(?![a-z0-9_+#])", user_idea_lower)) and not any(k in existing_constraints_text for k in ("in c", "c language", "c11")):
         _ensure_constraint("The application must be implemented in C language (C11 standard).")
-    elif "java" in user_idea_lower and "java" not in existing_constraints_text:
-        _ensure_constraint("The application must be implemented in Java.")
-    elif any(name in user_idea_lower for name in ("python", "go", "rust", "ruby", "php", "kotlin", "swift", "c#", "typescript")):
-        supported = "The application must be implemented using C, C++, Java, or HTML/CSS/JavaScript."
+    elif (
+        re.search(r"\b(?:java|python|rust|ruby|php|kotlin|swift|typescript|react|vue|angular|svelte)\b", user_idea_lower)
+        or re.search(r"\b(?:golang|go language|go programming|go code|in go)\b", user_idea_lower)
+        or "c#" in user_idea_lower
+    ):
+        supported = "The generated project must use C, C++, or plain JavaScript with HTML/CSS; other languages and frontend frameworks are unsupported."
         if supported.lower() not in existing_constraints_text:
             _ensure_constraint(supported)
 

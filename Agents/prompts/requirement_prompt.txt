@@ -39,7 +39,7 @@ CONSTRAINTS / ASSUMPTIONS / OPEN QUESTIONS
 - Open questions are for unresolved items that could change the scope. They do not block this stage.
 
 IMPLEMENTATION BOUNDARY
-Do not invent arbitrary technical implementations. However, IF the user explicitly specifies a supported language or technology constraint (C, C++, Java, HTML/CSS, or JavaScript), you MUST record it as a Constraint (e.g. CON-01: "The system must be built using C"). Unsupported languages must be converted to a constraint stating that the project will use C, C++, Java, or HTML/CSS/JavaScript instead.
+Do not invent arbitrary technical implementations. However, IF the user explicitly specifies a supported language or technology constraint (C, C++, JavaScript, or plain HTML/CSS), you MUST record it as a Constraint (e.g. CON-01: "The system must be built using C"). This project supports only C, C++, and plain JavaScript with HTML/CSS. If the user requests another programming language or a frontend framework, record a constraint that the implementation must use one of those supported stacks instead.
 
 VALIDATE BEFORE RETURNING
 Completeness, consistency, clarity, testability, traceability, no duplication, no implementation leakage.

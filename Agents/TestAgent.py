@@ -1,15 +1,15 @@
 import os
 import re
-import ast
 import json
 import shutil
 import subprocess
 import tempfile
 import imports
-from stack_skills import stack_skill
-from skill_registry import load_agent_skills
+from skill_registry import load_agent_skills, load_skill
 from pydantic import BaseModel, Field
 from State_definition import AgentState
+from generated_test_validation import validate_state_isolation, validate_test_quality
+from test_stacks import UnsupportedTestStackError, resolve_test_stack
 from test_runner import run_code_tests
 
 
@@ -20,33 +20,16 @@ class TestCase(BaseModel):
     test_function_name: str = Field(description="The function name or test label, e.g. test_display_records")
 
 
-class TestSuiteGeneration(BaseModel):
-    test_plan: str = Field(
-        description="A concise summary of what acceptance criteria and edge cases are being tested."
-    )
-    test_cases: list[TestCase] = Field(
-        default_factory=list,
-        description="Structured list of test cases mapping to AC IDs."
-    )
-    test_file_name: str = Field(
-        default="test_verification.py",
-        description="The relative filename for the test suite: verification.test.js for JavaScript, VerificationTest.java for Java, test_verification.cpp for C++, or test_verification.c for C."
-    )
-    test_file_content: str = Field(
-        description="Complete, executable test code matching the project programming language and runtime."
-    )
-
-
 REUSE_PREVIOUS_TESTS = True   # reuse passing tests; regenerate after assertion failures
 MAX_TEST_REPAIRS = 1
 MAX_CONTINUATIONS = 2
 
 # Signals that the TEST (not the code) is broken
 TEST_SIDE_PATTERNS = (
-    "SyntaxError", "ModuleNotFoundError", "ImportError", "ERROR collecting", "collected 0 items",
-    "fixture '", "Cannot find module", "ReferenceError", "SyntaxError: Unexpected",
+    "SyntaxError", "Cannot find module", "ReferenceError", "SyntaxError: Unexpected",
     r"_resetState is not a function",
-    "no test files", "undefined: ", "cannot find package", "package .* is not in",
+    r"test_verification\.(?:c|cpp):\d+(?::\d+)?:.*(?:fatal )?error:",
+    "no test files", "no tests found",
 )
 
 
@@ -54,7 +37,6 @@ class TestPlan(BaseModel):
     """Small structured call: the plan only. The test code is generated separately as plain text."""
     test_plan: str = Field(description="Concise summary of acceptance criteria and edge cases being tested, and what cannot be tested.")
     test_cases: list[TestCase] = Field(default_factory=list)
-    test_file_name: str = Field(default="test_verification.py")
 
 
 def _strip_fences(text: str) -> str:
@@ -105,14 +87,12 @@ def _complete_text(llm, messages: list) -> str:
     return _strip_fences(out)
 
 
-def _validate_test_file(name: str, content: str):
+def _validate_test_file(name: str, content: str, code_files: list | None = None):
     """Return an error string if the test file is not even syntactically valid."""
     if len(content.strip()) < 30:
         return "Test file is empty."
     try:
-        if name.endswith(".py"):
-            ast.parse(content)
-        elif name.endswith((".js", ".mjs", ".cjs")) and shutil.which("node"):
+        if name.endswith(".js") and shutil.which("node"):
             with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as t:
                 t.write(content)
                 p = t.name
@@ -124,7 +104,8 @@ def _validate_test_file(name: str, content: str):
                 os.unlink(p)
     except SyntaxError as e:
         return f"SyntaxError line {e.lineno}: {e.msg}"
-    return None
+
+    return validate_state_isolation(content, code_files or [])
 
 
 def _is_test_side_failure(result: dict, code_files: list | None = None) -> bool:
@@ -132,20 +113,18 @@ def _is_test_side_failure(result: dict, code_files: list | None = None) -> bool:
     blob = (result.get("raw_output") or "") + " ".join(result.get("errors") or [])
     if "[DEPENDENCY]" in blob or result.get("execution_status") in ("docker_unavailable", "timeout"):
         return False
-    # A missing module that the generated code itself imports = code-side (bad requirements / missing file)
-    code_text = "\n".join(f.get("content", "") for f in (code_files or []) if isinstance(f, dict))
-    for mod in re.findall(r"No module named '([\w\.]+)'", blob):
-        top = mod.split(".")[0]
-        if re.search(rf"^\s*(?:from|import)\s+{re.escape(top)}\b", code_text, re.MULTILINE):
-            return False
     return any(re.search(p, blob) for p in TEST_SIDE_PATTERNS)
 
 
-def _can_reuse_previous_tests(test_results: dict) -> bool:
+def _can_reuse_previous_tests(test_results: dict, expected_filename: str | None = None) -> bool:
     """Reuse a suite only after it passed or when Docker prevented execution."""
     return bool(
         REUSE_PREVIOUS_TESTS
         and test_results.get("test_files")
+        and (
+            expected_filename is None
+            or expected_filename in test_results.get("test_files", {})
+        )
         and not test_results.get("test_side_error")
         and (
             (test_results.get("success") is True and test_results.get("failed_tests", 0) == 0)
@@ -245,6 +224,7 @@ def Test_Agent(state: AgentState) -> dict:
                 "failed_tests": 0,
                 "errors": ["No code files available in state['code']['files'] to execute tests against."],
                 "raw_output": "Execution skipped: empty code artifact.",
+                "execution_status": "missing_code",
                 "summary": "Testing failed: Code Agent did not produce any source files.",
                 "duration_seconds": 0.0,
                 "test_files": {},
@@ -254,129 +234,46 @@ def Test_Agent(state: AgentState) -> dict:
             "workflow_status": "running"
         }
 
-    # 1. Detect project runtime stack from files
-    file_paths = [f.get("path", "").lower() for f in code_files if isinstance(f, dict)]
-    is_java = any(p.endswith((".java", ".jar")) or p == "pom.xml" for p in file_paths)
-    is_cpp = any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")) for p in file_paths)
-    is_c = any(p.endswith((".c", ".h")) for p in file_paths)
-    is_js_or_frontend = any(p.endswith((".js", ".jsx", ".ts", ".tsx", ".html")) or p == "package.json" for p in file_paths)
+    try:
+        test_stack = resolve_test_stack(code_files, design)
+    except UnsupportedTestStackError as exc:
+        message = str(exc)
+        print(f"  [Test Agent] {message}")
+        return {
+            "test_results": {
+                "success": False,
+                "total_tests": 0,
+                "passed_tests": 0,
+                "failed_tests": 0,
+                "errors": [message],
+                "raw_output": "",
+                "execution_status": "unsupported_stack",
+                "summary": "Testing skipped: unsupported generated project stack.",
+                "duration_seconds": 0.0,
+                "test_files": {},
+                "test_plan": "",
+                "test_cases": [],
+                "test_side_error": False,
+            },
+            "test_version": state.get("test_version", 0) + 1,
+            "current_stage": "test",
+            "workflow_status": "running",
+        }
 
-    if is_js_or_frontend:
-        stack_guidelines = """
-=== PROJECT STACK: JavaScript / Frontend / Node.js ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'verification.test.js'
-2. Use CommonJS ('const ... = require(...)') and Node.js built-in modules ONLY: 'node:test', 'node:assert', and 'node:fs'.
-3. Do NOT use ESM syntax ('import ...', 'export ...'). Always use CommonJS require.
-4. Do NOT require third-party packages (e.g. jest, mocha, chai, jsdom, react-scripts) because tests run in a clean Node environment without external node_modules.
-5. Tests must exercise the REAL code:
-   - To verify HTML structure: read `index.html` with fs.
-     * Check stylesheets: assert(html.includes('<link rel="stylesheet"'))
-     * Check scripts: assert(html.includes('<script src="logic.js">'))
-     * Check elements by id using a REGEX, NOT exact tag string:
-       assert(/id=["']goal-input["']/.test(html))   ← CORRECT
-       assert(html.includes('<input id="goal-input">'))  ← WRONG (attribute order not guaranteed)
-   - To verify logic: require('./logic.js') and ONLY test functions and properties explicitly in module.exports.
-     NEVER call unexported internal helpers.
-6. STATE ISOLATION IS MANDATORY:
-   - Inspect the actual source and exports before using any reset helper or state property.
-     NEVER assume `_resetState`, `goals`, `streaks`, or `textbooks` exists.
-   - If `_resetState` is exported, it may be called at the start of each test.
-   - Otherwise, for CommonJS modules, load a fresh module instance per test:
-       function loadFreshLogic() {
-         const path = require.resolve('./logic.js');
-         delete require.cache[path];
-         return require(path);
-       }
-     Then obtain `const logic = loadFreshLogic()` inside each test.
-   - Do not assign to properties that are not exported or writable. Build test data using
-     actual public functions and assert their observed return values and effects.
-   Correct skeleton when the module has no reset export:
-   const test = require('node:test');
-   const assert = require('node:assert');
-
-   function loadFreshLogic() {
-     const path = require.resolve('./logic.js');
-     delete require.cache[path];
-     return require(path);
-   }
-
-   test('TC-01: ...', () => {
-     const logic = loadFreshLogic();
-     // ... test body
-   });
-7. ASSERTION RULES — these mistakes cause permanent test failures:
-   a. NEVER use `===` to compare objects or arrays:
-      assert(logic.streaks === {})         ← ALWAYS FALSE (reference identity)
-      assert.deepStrictEqual(logic.streaks, {})  ← CORRECT
-   b. NEVER call .includes() on a function:
-      assert(logic.displayErrorMessage.includes('...'))  ← TypeError, function has no .includes
-      Instead: assert the documented/public return value and observable effect.
-   c. Never assume a mutator returns a boolean. Assert the exact return shape implemented
-      by the public function and required by the requirements.
-   d. NEVER assert on internal error message text — assert the observable public effect.
-   e. Use assert.strictEqual for primitives, assert.deepStrictEqual for objects/arrays.
-8. Every single test case MUST be registered using test('TC-XX: description', () => { ... }).
-9. NEVER generate Python code for a JavaScript frontend project!
-"""
-    elif is_java:
-        stack_guidelines = """
-=== PROJECT STACK: Java ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'VerificationTest.java'
-2. Use standard org.junit.
-"""
-    elif is_cpp:
-        stack_guidelines = """
-=== PROJECT STACK: C++ ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'test_verification.cpp'
-2. Use standard C++ assertions and iostream only unless the source requires another standard header.
-3. Include the real project headers and call the actual functions/classes under test.
-4. Do not generate Python, pytest, or JavaScript tests for a C++ project.
-"""
-    elif is_c:
-        stack_guidelines = """
-=== PROJECT STACK: C ===
-CRITICAL TESTING INSTRUCTIONS:
-1. Target filename: 'test_verification.c'
-2. Use standard C99/C11 features only: stdio.h, stdlib.h, assert.h, string.h, errno.h, math.h.
-3. NEVER generate Python code for a C project.
-4. Use a single executable test harness that calls the real functions declared in the project headers.
-5. Include the project header files directly, e.g. #include \"input_parser.h\" or #include \"operation_executor.h\".
-6. Use assert() and printf() to validate behavior; do not mock away business logic.
-7. Compile the test harness with GCC in the runner using the project .c files, excluding the app main if present.
-"""
-    else:
-        stack_guidelines = """
-=== UNSUPPORTED PROJECT STACK ===
-Only C, C++, Java, JavaScript, HTML, and CSS projects are supported.
-Do not generate or execute tests for another language.
-"""
-
-    # 2. Test file name / command per stack
-    if is_js_or_frontend:
-        default_name, test_command = "verification.test.js", "node --test verification.test.js"
-    elif is_java:
-        default_name, test_command = "VerificationTest.java", "mvn test"
-    elif is_cpp:
-        default_name, test_command = "test_verification.cpp", None
-    elif is_c:
-        default_name, test_command = "test_verification.c", None
-    else:
-        default_name = "verification.test.js"
-        test_command = "node --test verification.test.js"
+    default_name = test_stack.test_filename
+    test_command = test_stack.test_command
 
     project_path = state.get("generated_project_path", "")
     if not project_path:
         project_path = os.path.join(os.getcwd(), "generated_projects", state.get("project_id", "proj_001"))
 
     llm = imports.get_llm(agent_type="test", max_tokens=4000)
-    test_skills = "\n\n".join(
+    test_skills = [
         skill.instructions for skill in load_agent_skills("test")
-    )
+    ]
+    test_skills.append(load_skill(test_stack.skill_id).instructions)
     system_prompt = imports.SystemMessage(content=(
-        imports.load_prompt("prompts/test_prompt.txt") + "\n\n" + test_skills
+        imports.load_prompt("prompts/test_prompt.txt") + "\n\n" + "\n\n".join(test_skills)
     ))
 
     req_context = _compact_test_requirements(requirements)
@@ -419,9 +316,9 @@ Previous test output (last 8000 characters):
 === SOURCE CODE UNDER TEST (SIGNATURES & CODE) ===
 {code_context}
 
-{stack_guidelines}
+=== SELECTED TEST STACK ===
+{test_stack.name}
 
-{stack_skill(design, 'TEST')}
 {previous_test_audit}
 """
 
@@ -429,7 +326,7 @@ Previous test output (last 8000 characters):
     test_cases = []
 
     # Keep a stable suite only when it passed or execution never started (Docker unavailable).
-    if _can_reuse_previous_tests(prev):
+    if _can_reuse_previous_tests(prev, default_name):
         test_name, test_content = next(iter(prev_tests.items()))
         plan_text = prev.get("test_plan", "")
         test_cases = prev.get("test_cases") or []
@@ -458,7 +355,7 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
         ])
 
     # 4. Validate, then repair the test file itself before blaming the code
-    err = _validate_test_file(test_name, test_content)
+    err = _validate_test_file(test_name, test_content, code_files)
     repairs = 0
     while err and repairs < MAX_TEST_REPAIRS + 1:
         repairs += 1
@@ -467,19 +364,44 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
             system_prompt,
             imports.HumanMessage(content=base_context + f"\n--- current {test_name} ---\n{test_content}\n\nError: {err}\nReturn the complete corrected test file only."),
         ])
-        err = _validate_test_file(test_name, test_content)
+        err = _validate_test_file(test_name, test_content, code_files)
 
-    def _write_and_run(content: str) -> dict:
+    def _write_and_run(content: str) -> tuple[dict, dict]:
         files = {test_name: content}
         if os.path.exists(project_path):
             with open(os.path.join(project_path, test_name), "w", encoding="utf-8") as fh:
                 fh.write(content)
-        return run_code_tests(files=code_files, test_files=files, test_command=test_command, timeout_seconds=120)
+        quality = validate_test_quality(test_stack.key, content, requirements, test_cases)
+        if quality["errors"]:
+            return ({
+                "success": False,
+                "total_tests": 0,
+                "passed_tests": 0,
+                "failed_tests": 0,
+                "errors": quality["errors"],
+                "raw_output": "",
+                "execution_status": "test_quality_error",
+                "summary": "Test execution skipped: generated suite did not meet quality checks.",
+                "duration_seconds": 0.0,
+            }, quality)
+        return (
+            run_code_tests(
+                files=code_files,
+                test_files=files,
+                test_command=test_command,
+                timeout_seconds=120,
+            ),
+            quality,
+        )
 
-    execution_result = _write_and_run(test_content)
+    execution_result, test_quality = _write_and_run(test_content)
 
     # 5. If the run died because of the TEST (import path, syntax, missing fixture), fix the test once and rerun
-    test_side = (not execution_result["success"]) and _is_test_side_failure(execution_result, code_files)
+    test_side = (
+        not execution_result["success"]
+        and execution_result.get("execution_status") != "test_quality_error"
+        and _is_test_side_failure(execution_result, code_files)
+    )
     for _ in range(MAX_TEST_REPAIRS if test_side else 0):
         print("  [Test Agent] Failure looks test-side; regenerating test with the runner output.")
         tail = "\n".join((execution_result.get("raw_output") or "").splitlines()[-40:])
@@ -487,8 +409,12 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
             system_prompt,
             imports.HumanMessage(content=base_context + f"\n--- current {test_name} ---\n{test_content}\n\nRunner output:\n{tail}\n\nFix the TEST FILE (imports, names, setup). Do not weaken assertions. Return the complete file only."),
         ])
-        execution_result = _write_and_run(test_content)
-        test_side = (not execution_result["success"]) and _is_test_side_failure(execution_result, code_files)
+        execution_result, test_quality = _write_and_run(test_content)
+        test_side = (
+            not execution_result["success"]
+            and execution_result.get("execution_status") != "test_quality_error"
+            and _is_test_side_failure(execution_result, code_files)
+        )
 
     test_files_to_run = {test_name: test_content}
 
@@ -505,6 +431,7 @@ Write the COMPLETE test file `{test_name}`. Output ONLY the raw code: no markdow
         "test_files": test_files_to_run,
         "test_plan": plan_text,
         "test_cases": test_cases,
+        "test_quality": test_quality,
         "test_side_error": bool(test_side),
     }
     if test_side:

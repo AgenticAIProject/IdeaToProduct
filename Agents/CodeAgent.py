@@ -4,7 +4,7 @@ CodeAgent.py - lean, design-driven code generation.
 Pipeline
     1. PLAN      one small structured call -> list of files to write (+ exports)
     2. GENERATE  one plain-text call PER FILE (no JSON wrapping, truncation-safe)
-    3. VALIDATE  deterministic checks (ast / json / node --check / truncation markers)
+    3. VALIDATE  deterministic checks (json / node --check / truncation markers)
     4. REPAIR    feed the real error back to the LLM for that one file (max 2 tries)
     5. WRITE     repo_scaffold -> disk
 
@@ -17,7 +17,6 @@ requirements always fails the tests; it just hides the real problem. If generati
 fails, the agent says so and the real error flows to the next stage.
 """
 
-import ast
 import json
 import os
 import re
@@ -32,11 +31,12 @@ import imports
 from State_definition import AgentState
 from skill_registry import load_agent_skills
 from stack_skills import stack_skill
+from test_stacks import UnsupportedTestStackError, resolve_test_stack
 from tools import WORKSPACE_ROOT, repo_scaffold
 
 MAX_REPAIR_ATTEMPTS = 2
 MAX_CONTINUATIONS = 2          # how often we ask the model to continue a cut-off file
-MANIFESTS = {"requirements.txt", "package.json", "go.mod", "pom.xml", "cargo.toml"}
+MANIFESTS = {"package.json"}
 PLACEHOLDER_MARKERS = (
     "rest of the code", "your code here", "implement this", "implementation goes here",
     "same as before", "remains unchanged", "# ...", "// ...",
@@ -48,7 +48,7 @@ PLACEHOLDER_MARKERS = (
 # ──────────────────────────────────────────────────────────────────────────────
 
 class FilePlan(BaseModel):
-    path: str = Field(description="Relative path, e.g. 'app.py', 'static/index.html', 'package.json'")
+    path: str = Field(description="Relative path, e.g. 'main.c', 'main.cpp', 'index.html', or 'package.json'")
     purpose: str = Field(description="One line: what this file is responsible for")
     exports: list[str] = Field(
         default_factory=list,
@@ -59,10 +59,9 @@ class FilePlan(BaseModel):
 
 
 class CodePlan(BaseModel):
-    language: str = Field(description="Main language: C, C++, Java, or JavaScript")
+    language: str = Field(description="Main generated-project language: C, C++, or JavaScript")
     files: list[FilePlan] = Field(description="Every file needed to run the project. Do NOT include test files.")
     run_command: str = Field(default="", description="Command to run the project")
-    test_command: str = Field(default="", description="Command to run tests, e.g. 'pytest --tb=short -v'")
     dependencies: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list, description="Implementation decisions NOT specified by the design")
 
@@ -96,31 +95,6 @@ def extract_file_interface(path: str, content: str) -> str:
     """Extract public signatures, types, and exports instead of full source code to save context."""
     ext = os.path.splitext(path)[1].lower()
 
-    # Python files: extract class/func signatures
-    if ext == ".py":
-        try:
-            tree = ast.parse(content)
-            signatures = []
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    args = ast.unparse(node.args) if hasattr(ast, "unparse") else "..."
-                    ret = f" -> {ast.unparse(node.returns)}" if getattr(node, "returns", None) and hasattr(ast, "unparse") else ""
-                    signatures.append(f"def {node.name}({args}){ret}: ...")
-                elif isinstance(node, ast.ClassDef):
-                    signatures.append(f"class {node.name}:")
-                    for item in node.body:
-                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            args = ast.unparse(item.args) if hasattr(ast, "unparse") else "..."
-                            ret = f" -> {ast.unparse(item.returns)}" if getattr(item, "returns", None) and hasattr(ast, "unparse") else ""
-                            signatures.append(f"    def {item.name}({args}){ret}: ...")
-            if signatures:
-                return "\n".join(signatures)
-        except Exception:
-            lines = [line.strip() for line in content.splitlines() if line.strip().startswith(("def ", "class ", "@app."))]
-            if lines:
-                return "\n".join(lines[:30])
-        return content[:500]
-
     # C / C++ files:
     if ext in (".h", ".hpp"):
         return content[:1500]
@@ -146,7 +120,7 @@ def extract_file_interface(path: str, content: str) -> str:
         return f"{path}: (HTML structure)"
 
     # JS files: extract exported functions
-    if ext in (".js", ".ts", ".mjs"):
+    if ext in (".js", ".mjs", ".cjs"):
         lines = []
         for line in content.splitlines():
             s = line.strip()
@@ -298,21 +272,7 @@ def validate_file(path: str, content: str) -> Optional[str]:
 
     ext = os.path.splitext(path)[1].lower()
     try:
-        if ext == ".py":
-            try:
-            # Check for raw compilation typos
-                ast.parse(content, filename=path)
-                
-                # Check for common missing imports before sending to test_runner
-                if "os.environ" in content and "import os" not in content:
-                    return "SyntaxError: 'os' module is used (os.environ) but 'import os' is missing."
-                if "sqlite3.connect" in content and "import sqlite3" not in content:
-                    return "SyntaxError: 'sqlite3' module is used but 'import sqlite3' is missing."
-                
-            except SyntaxError as e:
-                return f"SyntaxError line {e.lineno}: {e.msg}"
-
-        elif ext == ".json":
+        if ext == ".json":
             json.loads(content)
         elif ext in (".html", ".htm"):
             if "</html>" not in low:
@@ -336,13 +296,14 @@ def validate_file(path: str, content: str) -> Optional[str]:
     return None
 
 
-def validate_c_project(files: dict[str, str]) -> list[str]:
-    """Compile-check all C translation units together with their generated headers available."""
-    sources = [path for path in files if path.lower().endswith(".c")]
-    if not sources:
+def validate_native_project(files: dict[str, str]) -> list[str]:
+    """Syntax-check generated C and C++ translation units with their headers available."""
+    source_groups = (
+        ((".c",), "gcc", "-std=c11", "C"),
+        ((".cpp", ".cc", ".cxx"), "g++", "-std=c++17", "C++"),
+    )
+    if not any(path.lower().endswith(exts) for exts, _, _, _ in source_groups for path in files):
         return []
-    if not shutil.which("gcc"):
-        return ["gcc is not installed; C project compile check was skipped."]
 
     with tempfile.TemporaryDirectory() as temp_dir:
         include_dirs = {temp_dir}
@@ -354,133 +315,30 @@ def validate_c_project(files: dict[str, str]) -> list[str]:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as generated_file:
                 generated_file.write(content)
-            if path.lower().endswith((".c", ".h")):
+            if path.lower().endswith((".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx")):
                 include_dirs.add(os.path.dirname(full_path))
 
-        command = ["gcc", "-std=c11", "-Wall", "-Wextra", "-fsyntax-only"]
-        for include_dir in sorted(include_dirs):
-            command.extend(["-I", include_dir])
-        command.extend(os.path.join(temp_dir, os.path.normpath(path)) for path in sources)
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        except subprocess.TimeoutExpired:
-            return ["gcc C project compile check timed out after 30 seconds."]
-        if result.returncode != 0:
-            return [result.stderr.strip()[:2000] or "gcc C project compile check failed."]
-    return []
+        errors = []
+        for extensions, compiler, standard, label in source_groups:
+            sources = [path for path in files if path.lower().endswith(extensions)]
+            if not sources:
+                continue
+            if not shutil.which(compiler):
+                errors.append(f"{compiler} is not installed; {label} project compile check was skipped.")
+                continue
 
-
-def check_cross_file(files: dict[str, str]) -> list[str]:
-    """Warn when a Python file imports a module that is neither generated, stdlib, nor in requirements.txt."""
-    import sys
-    problems = []
-    local = {os.path.splitext(p)[0].split("/")[0] for p in files if p.endswith(".py")}
-    reqs = files.get("requirements.txt", "").lower().replace("_", "-")
-    stdlib = getattr(sys, "stdlib_module_names", set())
-    for path, content in files.items():
-        if not path.endswith(".py"):
-            continue
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            names = []
-            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                names = [node.module.split(".")[0]]
-            elif isinstance(node, ast.Import):
-                names = [a.name.split(".")[0] for a in node.names]
-            for n in names:
-                if n in stdlib or n in local or n.lower().replace("_", "-") in reqs:
-                    continue
-                problems.append(f"{path}: imports '{n}' (not generated, not stdlib, not in requirements.txt)")
-    return sorted(set(problems))
-
-
-def ensure_requirements_txt(written: dict[str, str], plan: CodePlan, project_id: str) -> None:
-    """Ensure requirements.txt exists and contains all imported third-party modules."""
-    import sys
-    is_python_project = (
-        getattr(plan, "language", "").lower() == "python"
-        or any(p.endswith(".py") for p in written.keys())
-        or any(f.path.endswith(".py") for f in getattr(plan, "files", []))
-    )
-    if not is_python_project:
-        return
-
-    stdlib = set(getattr(sys, "stdlib_module_names", set()))
-    stdlib.update({
-        "os", "sys", "re", "json", "time", "datetime", "math", "random", "typing", "collections",
-        "itertools", "functools", "pathlib", "sqlite3", "subprocess", "tempfile", "shutil", "ast",
-        "unittest", "http", "urllib", "logging", "hashlib", "base64", "uuid", "io", "copy", "threading",
-        "builtins", "abc", "contextlib", "dataclasses", "enum", "inspect", "operator", "string",
-    })
-
-    local_modules = {os.path.splitext(os.path.basename(p))[0] for p in written.keys()}
-    discovered_deps = set(plan.dependencies or [])
-
-    for p, content in written.items():
-        if not p.endswith(".py"):
-            continue
-        try:
-            tree = ast.parse(content)
-            for node in ast.walk(tree):
-                names = []
-                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                    names = [node.module.split(".")[0]]
-                elif isinstance(node, ast.Import):
-                    names = [a.name.split(".")[0] for a in node.names]
-                for name in names:
-                    clean = name.lower()
-                    if clean not in stdlib and clean not in local_modules:
-                        discovered_deps.add(clean)
-        except Exception:
-            pass
-
-    package_map = {
-        "fastapi": "fastapi",
-        "pydantic": "pydantic",
-        "sqlalchemy": "sqlalchemy",
-        "requests": "requests",
-        "flask": "flask",
-        "uvicorn": "uvicorn",
-        "httpx": "httpx",
-        "dotenv": "python-dotenv",
-        "jose": "python-jose",
-        "jwt": "pyjwt",
-        "bcrypt": "bcrypt",
-        "pytest": "pytest",
-        "jinja2": "jinja2",
-    }
-
-    current_reqs = written.get("requirements.txt", "").strip()
-    existing_lines = {
-        re.split(r"[=<>]", line)[0].strip().lower()
-        for line in current_reqs.splitlines()
-        if line.strip() and not line.startswith("#")
-    }
-
-    new_packages = set()
-    for dep in discovered_deps:
-        mapped = package_map.get(dep, dep)
-        if mapped not in existing_lines:
-            new_packages.add(mapped)
-
-    # If FastAPI is used, ensure uvicorn, pytest, httpx are included for tests
-    if "fastapi" in existing_lines or "fastapi" in new_packages:
-        for extra in ("uvicorn", "pytest", "httpx"):
-            if extra not in existing_lines:
-                new_packages.add(extra)
-
-    if new_packages or "requirements.txt" not in written or not written.get("requirements.txt", "").strip():
-        all_lines = [line.strip() for line in current_reqs.splitlines() if line.strip()]
-        for pkg in sorted(new_packages):
-            if pkg not in all_lines:
-                all_lines.append(pkg)
-        final_content = "\n".join(all_lines) + "\n"
-        written["requirements.txt"] = final_content
-        write_file_to_disk(project_id, "requirements.txt", final_content)
-        print(f"  [Code Agent] Ensured requirements.txt with dependencies: {sorted(existing_lines | new_packages)}")
+            command = [compiler, standard, "-Wall", "-Wextra", "-fsyntax-only"]
+            for include_dir in sorted(include_dirs):
+                command.extend(["-I", include_dir])
+            command.extend(os.path.join(temp_dir, os.path.normpath(path)) for path in sources)
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                errors.append(f"{compiler} {label} project compile check timed out after 30 seconds.")
+                continue
+            if result.returncode != 0:
+                errors.append(result.stderr.strip()[:2000] or f"{compiler} {label} project compile check failed.")
+        return errors
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -547,19 +405,31 @@ def make_plan(llm, req_ctx: str, design: dict) -> CodePlan:
 === DESIGN (authoritative; follow its technology_choices) ===
 {design_context(design)}
 
-List every file needed to run this project (including the dependency manifest, e.g. requirements.txt
-or package.json). Keep it minimal: no files the design does not need. Do NOT list test files.
+List every file needed to run this project (include package.json only if metadata is needed; do not declare external dependencies).
+Keep it minimal: no files the design does not need. Do NOT list test files.
 For each file give the exact public names (`exports`) other files will rely on.
-Set test_command for the project's language (python: 'pytest --tb=short -v').""")
+The Test Agent selects and controls the test command; do not provide one.""")
     last_err = None
     for _ in range(2):
         try:
             plan = imports.invoke_structured(llm, CodePlan, [system, human])
             if plan and plan.files:
+                _validate_code_plan(plan, design)
                 return plan
+        except UnsupportedTestStackError:
+            raise
         except Exception as e:  # noqa: BLE001
             last_err = e
     raise RuntimeError(f"Could not create a code plan: {last_err}")
+
+
+def _validate_code_plan(plan: CodePlan, design: dict) -> None:
+    if plan.dependencies:
+        raise UnsupportedTestStackError(
+            "External generated-project dependencies are unsupported because the sandbox "
+            "does not install packages or allow network access."
+        )
+    resolve_test_stack([file.path for file in plan.files], design, plan.language)
 
 
 def generate_one_file(llm, fp: FilePlan, plan: CodePlan, requirements: dict, design: dict,
@@ -607,6 +477,7 @@ def write_file_to_disk(project_id: str, relative_path: str, content: str) -> str
 def generate_and_fix(llm, fp, plan, requirements, design, written, project_id: str, existing=None, feedback="") -> tuple[str, Optional[str]]:
     """Generate one file, validate it, repair with the real error up to MAX_REPAIR_ATTEMPTS."""
     content = generate_one_file(llm, fp, plan, requirements, design, written, existing, feedback)
+    resolve_test_stack({**written, fp.path: content}, design, plan.language)
     write_file_to_disk(project_id, fp.path, content)
     error = validate_file(fp.path, content)
     attempt = 0
@@ -618,6 +489,7 @@ def generate_and_fix(llm, fp, plan, requirements, design, written, project_id: s
             existing=content,
             feedback=f"Validation error: {error}\nReturn the complete corrected file.",
         )
+        resolve_test_stack({**written, fp.path: content}, design, plan.language)
         write_file_to_disk(project_id, fp.path, content)
         error = validate_file(fp.path, content)
     return content, error
@@ -663,14 +535,6 @@ def expand_dependent_targets(targets: list[str], all_files: dict[str, str]) -> l
                     if hdr in all_files and hdr not in expanded:
                         expanded.add(hdr)
                         changed = True
-
-            # 3. Python coupling: any file importing the modified module
-            elif target_ext == ".py":
-                for other_path, other_content in all_files.items():
-                    if other_path.endswith(".py") and other_path not in expanded:
-                        if re.search(rf"\b(?:from|import)\s+{re.escape(target_base)}\b", other_content):
-                            expanded.add(other_path)
-                            changed = True
 
     # Upstream dependencies generated first so downstream files receive their updated signatures!
     def _rank(p: str) -> int:
@@ -744,6 +608,10 @@ def Code_Agent(state: AgentState) -> dict:
         else:
             # ── Rework: only touch the files that need it ──────────────────────
             plan = CodePlan(**previous["plan"]) if previous.get("plan") else None
+            if plan is not None:
+                _validate_code_plan(plan, design)
+            else:
+                resolve_test_stack(list(prev_files), design)
             feedback = feedback_context(state)
             if plan is None:
                 plan = CodePlan(language="", files=[FilePlan(path=p, purpose="") for p in prev_files])
@@ -763,6 +631,14 @@ def Code_Agent(state: AgentState) -> dict:
             targets = [p for p in (selection.paths_to_change if selection else []) if p in prev_files] or list(prev_files)
             targets = expand_dependent_targets(targets, prev_files)
             new_files = selection.new_files if selection else []
+            if new_files:
+                _validate_code_plan(
+                    CodePlan(
+                        language=plan.language,
+                        files=[*plan.files, *new_files],
+                    ),
+                    design,
+                )
             print(f"  [Code Agent] Rework targets (with dependencies): {targets} (+{[f.path for f in new_files]} new)")
 
             for p in targets:
@@ -793,13 +669,25 @@ def Code_Agent(state: AgentState) -> dict:
             "retry_count": {**retry_count, "code": retry_count.get("code", 0) + 1},
         }
 
-    c_compile_errors = validate_c_project(written)
-    if c_compile_errors:
-        errors["C project compile check"] = "\n".join(c_compile_errors)
+    try:
+        project_stack = resolve_test_stack(written, design, plan.language)
+    except UnsupportedTestStackError as exc:
+        message = str(exc)
+        print(f"  [Code Agent] Generated project rejected: {message}")
+        return {
+            "code": {"files": [], "generation_error": message},
+            "code_version": code_version,
+            "current_stage": "code",
+            "workflow_status": "failed",
+            "retry_count": {**retry_count, "code": retry_count.get("code", 0) + 1},
+        }
+
+    native_compile_errors = validate_native_project(written)
+    if native_compile_errors:
+        errors["Native project compile check"] = "\n".join(native_compile_errors)
 
 
-    cross = check_cross_file(written)
-    notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()] + [f"[imports] {c}" for c in cross]
+    notes = list(plan.notes) + [f"[validation] {p}: {e}" for p, e in errors.items()]
 
     # ── Write to disk ────────────────────────────────────────────────────────
     scaffold = repo_scaffold.invoke({
@@ -825,7 +713,7 @@ def Code_Agent(state: AgentState) -> dict:
         "dependencies": plan.dependencies,
         "setup_instructions": plan.run_command,
         "implementation_notes": notes,
-        "test_command": plan.test_command,
+        "test_command": project_stack.test_command or "Native harness compiled and run by the Test Agent.",
         "generated_project_path": project_path,
         "files_written": scaffold.get("files_written", []),
         "validation_errors": errors,

@@ -29,8 +29,7 @@ CONTRACTS
 - Money as integer cents or Decimal, never float. Timestamps ISO-8601 UTC.
 
 DEPENDENCIES
-- The manifest (requirements.txt / package.json / go.mod) lists EVERY third-party package that the code
-  imports, and never lists standard-library modules.
+- Do not add external npm dependencies: generated projects are tested with network access disabled and no package installation. A `package.json`, if needed, contains metadata only.
 - Do not require network access at import time or startup. No secrets in code; use environment variables.
 
 TESTABILITY (a separate QA agent will test your code)
@@ -51,12 +50,12 @@ QUALITY
 - Implement the smallest solution that satisfies the approved V1 scope. Aim for 3 to 8 source files.
 
 CRITICAL RUNTIME HYGIENE:
-- Supported generated languages are C, C++, Java, JavaScript, HTML, and CSS. Do not generate Python or other unsupported languages.
-- Never inject query parameters or filtering notation directly into framework route decorators. Use function method signatures with type descriptors instead (e.g., `@app.get("/news")` with a parameter `category: Optional[str] = None`).
+- Supported generated projects are C, C++, or plain JavaScript with HTML/CSS. Do not generate Java, Python, TypeScript, frameworks requiring a build step, or other unsupported languages.
 
-Root Route Hygiene: Always implement a lightweight welcome landing route at the absolute path root (@app.get("/")). 
-This route should return a basic JSON status payload detailing system availability, system metadata, or a list of available endpoints.
- Never leave the absolute root unmapped to avoid confusing the user with clean execution 404 Not Found messages.
+ENTRYPOINTS
+- Follow the design's run command and entry-point contract exactly.
+- Browser projects use the HTML entry point specified in the design.
+- C and C++ projects provide one application `main` function.
 
 JAVASCRIPT TESTABILITY (Frontend/Node projects):
 - Keep state testable, but do not add test-only exports or public mutable state unless the design requires them. Tests must isolate CommonJS modules by reloading them when no reset API is part of the design.

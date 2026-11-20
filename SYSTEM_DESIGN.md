@@ -114,7 +114,7 @@ generated artifact metadata are not durable or shared.
 | `Agents/skill_registry.py` | Validates and maps skills to agents; no model-based selection |
 | `Agents/imports.py` | LLM construction, prompt loading, structured-output fallback |
 | `Agents/tools.py` | Grounding, project scaffolding, and utility tools |
-| `Agents/test_runner.py` | Multi-stack generated-project test execution |
+| `Agents/test_runner.py` | Isolated test execution for JavaScript/HTML/CSS, C, and C++ projects |
 | `generated_projects/` | Generated source projects and persisted stage artifacts |
 
 ### 4.1 Agent skills
@@ -326,30 +326,39 @@ prompt versions, input/output hashes, duration, and error information.
 
 **Processing**
 
-1. Detects the project stack from file extensions/manifests.
+1. Detects the project stack from one shared stack catalog, source extensions, design choices, and manifest contents.
 2. Selects stack-specific test conventions.
 3. Generates an independent verification test file.
 4. Reuses tests during code rework so the target does not move.
 5. Validates and repairs the test file before blaming application code.
-6. Runs the tests through the test runner.
-7. Stores counts, output, errors, duration, and test files.
+6. Requires executable assertions and plan coverage for every acceptance criterion (or functional requirement when no criteria exist).
+7. Runs only the stack-configured command through the test runner.
+8. Stores counts, output, errors, duration, test quality, and test files.
 
 **Supported execution paths**
 
-| Stack | Test convention |
+| Stack | Test skill and convention |
 | --- | --- |
-| JavaScript/frontend | CommonJS, Node built-in `node:test`, `node:assert`, `node:fs` |
-| Go | `go test` and standard `testing` |
-| Java | Maven/JUnit convention |
-| C | C test harness compiled with project sources |
-| Python/default | `pytest` or project-provided command |
+| JavaScript / HTML / CSS | `test-javascript`; CommonJS and Node built-in `node:test` |
+| C | `test-c`; C11 harness compiled with project sources |
+| C++ | `test-cpp`; C++17 harness compiled with project sources |
+
+Generated-project testing does not support Java, Python, TypeScript, Go, Rust,
+frontend frameworks, external npm dependencies, or mixed-language source projects.
+Unsupported stacks are reported explicitly and are not sent to a model for test generation.
+
+The configured test command is application-controlled; model output cannot choose
+an arbitrary shell command. Docker end-to-end tests exercise all three supported
+stacks when a Docker daemon is available.
 
 **Conditions**
 
 - No code files: returns an explicit failed test result.
 - Test generation fails: records a test-side error and can attempt repair.
+- Unsupported stack/command, missing assertions, or incomplete requirement-ID mapping: reports a deterministic gate failure and blocks approval.
 - Test process timeout: records an infrastructure/test-runner error.
-- Test failures: Review must reject the project.
+- Ordinary assertion failures inform review but do not automatically reject; Review must verify them against requirements.
+- A deterministic test-quality or unsupported-stack gate failure blocks approval.
 - All tests pass: Review may approve if all other gates pass.
 
 ### 7.5 Review Agent
@@ -364,7 +373,7 @@ prompt versions, input/output hashes, duration, and error information.
    Implementation, Tests, Security, and Documentation.
 2. Produces checks, findings, defects, feedback, summary, and score.
 3. Uses a deterministic fallback if the review model fails.
-4. Forces rejection when tests fail, even if the model says approved.
+4. Forces rejection for deterministic test-quality and unsupported-stack gate failures; ordinary assertion failures are checked against requirements rather than treated as an automatic veto.
 5. Uses score > 5 as the approval threshold.
 
 **Output and routing**

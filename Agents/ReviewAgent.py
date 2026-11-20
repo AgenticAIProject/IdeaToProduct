@@ -199,6 +199,31 @@ def Review_Agent(state: imports.AgentState) -> dict:
         state.get("code", {}).get("files", []),
     )
 
+    test_results = state.get("test_results", {})
+    test_gate_errors = list(test_results.get("test_quality", {}).get("errors", []))
+    if test_results.get("execution_status") in ("unsupported_stack", "command_rejected", "test_quality_error"):
+        test_gate_errors.extend(test_results.get("errors", []))
+    test_gate_errors = list(dict.fromkeys(test_gate_errors))
+    if test_gate_errors:
+        message = "Generated project failed deterministic test gates: " + "; ".join(test_gate_errors)
+        response.approved = False
+        response.defects = list(dict.fromkeys([*response.defects, message]))
+        response.feedback = list(dict.fromkeys([*response.feedback, message]))
+        response.summary = (response.summary + " " + message).strip()
+        tests_check = next((check for check in response.checks if check.area.lower() == "tests"), None)
+        if tests_check:
+            tests_check.status = "fail"
+            tests_check.note = message
+        else:
+            response.checks.append(GateCheck(area="Tests", status="fail", note=message))
+        if not any(finding.id == "F-TEST-GATE" for finding in response.findings):
+            response.findings.append(Finding(
+                id="F-TEST-GATE",
+                severity="high",
+                title="Generated project or test suite failed a deterministic test gate",
+                detail=message,
+            ))
+
     # Test results are evidence for review, not an automatic veto. The reviewer
     # must identify a requirement-backed implementation defect before rejecting.
     code_validation_errors = state.get("code", {}).get("validation_errors", {})
@@ -206,6 +231,7 @@ def Review_Agent(state: imports.AgentState) -> dict:
         response.approved
         and not response.defects
         and not code_validation_errors
+        and not test_gate_errors
         and response.overall_score >= 5
     )
 

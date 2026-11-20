@@ -41,6 +41,58 @@ def test_review_does_not_apply_an_automatic_test_failure_veto(monkeypatch):
     assert result["approval_status"] == "approved"
 
 
+def test_review_rejects_deterministic_test_quality_failures(monkeypatch):
+    class FakeReviewModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            return ReviewResult(approved=True, overall_score=9)
+
+    monkeypatch.setattr(
+        "ReviewAgent.imports.get_llm",
+        lambda **_kwargs: FakeReviewModel(),
+    )
+    result = Review_Agent({
+        "code": {"files": [{"path": "logic.js", "content": "module.exports = {};"}]},
+        "test_results": {
+            "success": False,
+            "execution_status": "test_quality_error",
+            "test_quality": {
+                "errors": ["Generated test file contains no recognized assertions."],
+            },
+        },
+    })
+
+    assert result["approval_status"] == "rejected"
+    assert any(check["status"] == "fail" for check in result["review"]["checks"] if check["area"] == "Tests")
+    assert any(finding["id"] == "F-TEST-GATE" for finding in result["review"]["findings"])
+
+
+def test_review_rejects_an_unsupported_generated_stack(monkeypatch):
+    class FakeReviewModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            return ReviewResult(approved=True, overall_score=9)
+
+    monkeypatch.setattr(
+        "ReviewAgent.imports.get_llm",
+        lambda **_kwargs: FakeReviewModel(),
+    )
+    result = Review_Agent({
+        "code": {"files": [{"path": "main.py", "content": "print('not supported')"}]},
+        "test_results": {
+            "success": False,
+            "execution_status": "unsupported_stack",
+            "errors": ["Unsupported generated source file(s): main.py."],
+        },
+    })
+
+    assert result["approval_status"] == "rejected"
+
+
 def test_review_still_rejects_a_requirement_backed_defect(monkeypatch):
     class FakeReviewModel:
         def with_structured_output(self, _schema):

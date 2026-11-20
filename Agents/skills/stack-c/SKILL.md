@@ -1,6 +1,6 @@
 ---
 name: stack-c
-description: Code and test guidance for standalone C11 projects.
+description: Code guidance for standalone C11 projects.
 ---
 
 ## CODE
@@ -10,10 +10,3 @@ Standalone C project (C11), compiles with gcc.
 - Include header guards (#ifndef CALC_H, #define CALC_H, #endif) in every .h file.
 - Use standard C11 library only: <stdio.h>, <stdlib.h>, <string.h>, <math.h>, <stdbool.h>, <errno.h>.
 - No external packages or third-party dependencies required.
-
-## TEST
-Standard C11 test harness using assert.h.
-- Target test file: `test_verification.c`
-- Include the project header files directly (e.g. #include "calculator.h").
-- Call functions with representative, edge-case, and boundary inputs using assert().
-- Compile test harness with gcc linking against all project .c files (excluding main.c).

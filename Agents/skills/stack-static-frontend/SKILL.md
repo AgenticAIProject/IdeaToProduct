@@ -1,6 +1,6 @@
 ---
 name: stack-static-frontend
-description: Code and test guidance for standalone HTML, CSS, and JavaScript projects without a build step.
+description: Code guidance for standalone HTML, CSS, and JavaScript projects without a build step.
 ---
 
 ## CODE
@@ -22,20 +22,3 @@ Static frontend (HTML/CSS/JS), no build step, works directly by opening index.ht
   CRITICAL RUNTIME RULE: NEVER write `const ... = require(...)` or `import` in `app.js`! `require()` does NOT exist in web browsers and will crash execution. In `app.js`, access logic directly from global scope or `window.logic`.
 - Complete Controls: Never omit essential controls (e.g. a calculator MUST include all digits `0` to `9` including `#zero`, plus clear, operators, and equals).
 - Stable IDs: Give every button, input, and display element a stable ID matching the plan's exports.
-
-## TEST
-Test harness runs in Node.js using built-in modules:
-- CommonJS only:
-  `const test = require('node:test'); const assert = require('node:assert'); const fs = require('node:fs');`
-  `const logic = require('./logic.js');`
-- HTML verification:
-  - Check stylesheet link: `assert(html.includes('<link rel="stylesheet" href="style.css">') || html.includes('style.css'))`. NEVER assert `<script src="style.css">`!
-  - Check script tags: `assert(html.includes('<script src="logic.js"></script>'))` and `assert(html.includes('<script src="app.js"></script>'))`.
-  - Check key element IDs from the plan exports (e.g. display, buttons).
-- Strict Export Contract:
-  - Tests must ONLY call functions and access properties explicitly exported in `module.exports`.
-  - NEVER call unexported internal functions (e.g. do not guess `logic.updateDisplay()` or `performCalculation()` if not exported).
-- State Isolation:
-  - Reset state before each test case (e.g. call clear function).
-  - Account for sequential input behavior (e.g. clicking '1' then '2' produces '12', not '2').
-- Do not try to run app.js or simulate the DOM in node:test; test pure functions from logic.js and inspect index.html markup with fs.

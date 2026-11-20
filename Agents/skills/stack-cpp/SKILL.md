@@ -1,6 +1,6 @@
 ---
 name: stack-cpp
-description: Code and test guidance for standalone C++17 projects.
+description: Code guidance for standalone C++17 projects.
 ---
 
 ## CODE
@@ -10,10 +10,3 @@ Standalone C++ project (C++17), compiles with g++.
 - Include header guards (#pragma once or #ifndef ... #endif) in every header file.
 - Use standard C++17 standard library: <iostream>, <string>, <vector>, <memory>, <algorithm>, <stdexcept>.
 - No external packages or third-party dependencies required.
-
-## TEST
-Standard C++ test harness.
-- Target test file: `test_verification.cpp`
-- Include the project header files directly.
-- Call class methods and functions with valid and boundary inputs, asserting expected outputs.
-- Compile test harness with g++ -std=c++17 linking against project .cpp files (excluding main.cpp).

@@ -71,6 +71,14 @@ registry and the logic that attaches instructions to model calls are specific
 to this application. The loader sends the skill's instruction body as prompt
 text; it does not execute skill code or automatically load referenced files.
 
+Generated project stacks are limited to C, C++, and plain JavaScript with
+HTML/CSS. The Test Agent selects one matching testing skill; JavaScript tests
+use Node's built-in runner, while C/C++ tests use compiled native harnesses.
+The sandbox does not install external packages or allow network access. Test
+suites must include executable assertions and map test cases to all acceptance
+criteria (or functional requirements when no acceptance criteria exist); missing
+assertions or incomplete mapping blocks approval.
+
 ---
 
 ## Problem

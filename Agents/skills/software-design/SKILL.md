@@ -116,21 +116,22 @@ TECHNOLOGY CHOICES
 technology_choices is a LIST of objects with category, technology and reason.
 Use these categories (include only the ones that apply):
 
-- language: JavaScript, Java, C, or C++
-- frontend: "HTML/CSS/JavaScript", React, Vue, or "None"
-- backend: Spring Boot, "CLI", or "None"
+- language: JavaScript, C, or C++
+- frontend: plain "HTML/CSS/JavaScript" or "None"
+- backend: Node.js, "CLI", or "None"
 - database: "Browser localStorage", or "None"
-- testing: node:test, JUnit, or a standard C/C++ test harness
+- testing: node:test or a standard C/C++ test harness
 
-The test environment supports node:test for JavaScript, JUnit for Java,
-and standard native harnesses for C/C++. Prefer those.
+Generated projects are supported only in C, C++, and plain JavaScript with
+HTML/CSS. The test environment supports node:test for JavaScript and standard
+native harnesses for C/C++.
 
 Defaults, ONLY when no constraint says otherwise:
-- APIs: only when explicitly part of a Java or C++ design; do not default to unsupported languages.
+- APIs: only when explicitly required and implementable with a supported stack.
 - User interfaces: plain HTML/CSS/JavaScript with no build step.
 
-Frameworks that need a build step (React, Vue, Svelte, Angular) are not
-runnable in the sandbox. Do not choose them unless the requirements demand it.
+Do not choose frontend frameworks or TypeScript; the generated-project test
+runner supports plain JavaScript, HTML, and CSS without a build step.
 
 libraries_and_tools holds helper packages (Pydantic, Requests, Bcrypt, ...).
 NEVER put an HTTP client or utility library as the frontend or backend.
